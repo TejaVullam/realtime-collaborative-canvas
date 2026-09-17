@@ -1,2 +1,2 @@
 // Central export for client-side type definitions
-export {};
+export * from './canvas.js';
