@@ -4,7 +4,7 @@
 
 ## Status
 
-🚧 Day 0 — Project Initialization
+🚧 Day 1 — Architecture & Domain Foundation
 
 The project is currently under active development.
 
@@ -17,7 +17,7 @@ A collaborative digital canvas workspace designed for real-time visual collabora
 | Day | Focus | Status |
 |-----|-------|--------|
 | Day 0 | Project initialization | ✅ |
-| Day 1 | Architecture foundation | ⏳ |
+| Day 1 | Architecture foundation | ✅ |
 | Day 2 | Canvas engine | ⏳ |
 | Day 3 | Authentication & rooms | ⏳ |
 | Day 4 | WebSocket infrastructure | ⏳ |
@@ -30,39 +30,41 @@ A collaborative digital canvas workspace designed for real-time visual collabora
 
 ## Features
 
-### Implemented (Day 0)
-- Project baseline structure & configuration
-- Client setup with React, TypeScript, Vite, Tailwind CSS
-- Server setup with Express, TypeScript, and basic health check endpoint
-- Development scripts, linting, and formatting tools
-- Documentation skeleton
+### Implemented (Day 0 & Day 1)
+- Initial system architecture and modular directory layout
+- Canvas domain model with discriminated union types for graphic entities
+- Canvas operation mutation model (`CanvasOperation`) with idempotency and ordering support
+- Decoupled `CanvasState` representation
+- Comprehensive architecture and protocol documentation in `docs/`
+- Express backend architecture with modular configuration, controllers, and routes
+- Health check verification endpoint (`GET /api/health`)
+- Vite + React + TypeScript + Tailwind CSS development setup with strict linting
 
 ### Planned
-- Collaborative drawing
-- Shapes
-- Text
-- Real-time synchronization
-- Multi-user presence
-- Persistent canvas state
-- Conflict resolution
-- Version history
-- Export
+- Canvas rendering engine (HTML5 Canvas)
+- Collaborative drawing tools (pencil, brush, shapes, text, selection)
+- Real-time WebSocket synchronization
+- Multi-user presence and live cursor tracking
+- Room management and access control
+- Persistent canvas snapshots and operation history
+- Conflict resolution engine
+- Canvas export (PNG, SVG, JSON)
 
 ## Planned Architecture
 
-> Architecture details and diagram will be documented in [docs/architecture.md](docs/architecture.md) once the core system architecture is finalized.
+System architecture and data flow are documented in detail in [docs/architecture.md](docs/architecture.md).
 
 ## Tech Stack
 
 ### Frontend
-- React
-- TypeScript
-- Vite
-- Tailwind CSS
+- React 19
+- TypeScript 5.7
+- Vite 6
+- Tailwind CSS 4
 
 ### Backend
 - Node.js
-- TypeScript
+- TypeScript 5.7
 - Express
 
 ### Planned Infrastructure
@@ -106,4 +108,4 @@ The backend health check will be accessible at `http://localhost:5000/api/health
 
 ## Project Status
 
-Day 0 of 10
+Day 1 of 10
