@@ -1,21 +1,18 @@
-import dotenv from 'dotenv';
-import express, { Request, Response } from 'express';
+import express from 'express';
 import cors from 'cors';
-
-dotenv.config();
+import { config } from './config/index.js';
+import apiRoutes from './routes/index.js';
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5000;
 
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok' });
-});
+// API routes root
+app.use('/api', apiRoutes);
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+app.listen(config.port, () => {
+  console.log(`Server is running on port ${config.port} [${config.nodeEnv}]`);
 });
 
 export default app;
