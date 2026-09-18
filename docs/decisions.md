@@ -52,3 +52,23 @@ This document records the architectural and design decisions made throughout the
 - **Consequences**:
   - Prevents premature commitment to complex CRDT or OT libraries before basic local rendering and WebSocket telemetry are proven.
   - Keeps Day 1 codebase lean, maintainable, and free of unnecessary third-party synchronization dependencies.
+
+---
+
+## ADR-005: HTML5 Canvas Rendering Engine
+
+- **Status**: Accepted (Day 2)
+- **Context**: The project requires high-performance rendering of potentially thousands of structured canvas objects, smooth high-frequency freehand strokes, real-time panning/zooming, and minimal DOM overhead.
+- **Decision**:
+  - Use a single HTML5 `<canvas>` element driven by a procedural 2D context rendering pipeline (`renderCanvas`), while maintaining the underlying visual state as structured TypeScript data objects.
+  - Reject DOM-based rendering (thousands of `<div>` or `<svg>` elements in React virtual DOM) to avoid reconciliation bottlenecks during continuous pointer gestures.
+- **Consequences**:
+  - **Benefits**:
+    - High-performance, constant-frame-rate rendering even with dense scenes.
+    - Native support for smooth freehand paths and complex shape clipping.
+    - Decoupled state: React only re-renders lightweight toolbar and status UI; canvas redraws are optimized.
+    - Seamless support for high-DPI (Retina) displays via backing store scaling.
+  - **Trade-offs**:
+    - Requires manual implementation of geometric hit-testing for selection.
+    - Requires custom rendering of selection bounding boxes and resize handles.
+    - Accessibility considerations require dedicated UI overlays.
