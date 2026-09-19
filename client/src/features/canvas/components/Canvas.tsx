@@ -8,7 +8,19 @@ import { useCanvasInteraction } from '../hooks/useCanvasInteraction.js';
 import { CanvasToolbar } from './CanvasToolbar.js';
 import { CanvasStatusBar } from './CanvasStatusBar.js';
 
-export const Canvas: React.FC = () => {
+export interface CanvasProps {
+  roomName?: string;
+  roomId?: string;
+  canvasId?: string;
+  onBackToDashboard?: () => void;
+}
+
+export const Canvas: React.FC<CanvasProps> = ({
+  roomName,
+  roomId,
+  canvasId,
+  onBackToDashboard,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -17,7 +29,7 @@ export const Canvas: React.FC = () => {
   // Local Canvas State Reducer
   const [canvasState, dispatch] = useReducer(
     canvasStateReducer,
-    undefined,
+    canvasId || 'local-canvas-1',
     createInitialCanvasState,
   );
 
@@ -36,6 +48,7 @@ export const Canvas: React.FC = () => {
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    handlePointerCancel,
     handleWheel,
     handleConfirmText,
     handleCancelText,
@@ -115,6 +128,49 @@ export const Canvas: React.FC = () => {
       ref={containerRef}
       className="relative w-full h-full min-h-screen bg-slate-950 overflow-hidden select-none"
     >
+      {/* Top Left Room Context Header */}
+      {(roomName || onBackToDashboard) && (
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-3">
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 backdrop-blur-md text-xs font-medium transition-colors shadow-lg"
+              title="Return to Dashboard"
+            >
+              <svg
+                className="w-4 h-4 text-slate-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                />
+              </svg>
+              <span>Dashboard</span>
+            </button>
+          )}
+
+          {roomName && (
+            <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 backdrop-blur-md text-xs flex items-center gap-2 shadow-lg">
+              <div className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span className="font-semibold text-white tracking-wide">
+                {roomName}
+              </span>
+              {roomId && (
+                <span className="text-slate-500 font-mono text-[11px] border-l border-slate-800 pl-2">
+                  ID: {roomId.slice(-6)}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top Floating Toolbar */}
       <CanvasToolbar
         activeTool={activeTool}
@@ -131,6 +187,7 @@ export const Canvas: React.FC = () => {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onWheel={handleWheel}
         style={{ cursor: getCursorStyle(), touchAction: 'none' }}
         className="block w-full h-full"

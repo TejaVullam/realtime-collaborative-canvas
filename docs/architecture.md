@@ -6,17 +6,25 @@ This document details the system architecture for the Real-Time Collaborative Ca
 
 The Real-Time Collaborative Canvas is designed as a decoupled, multi-user visual workspace enabling simultaneous manipulation of graphic entities with low latency, robust state synchronization, and reliable persistence.
 
-## Current Implementation (Day 2)
+## Current Implementation (Day 3)
 
-As of Day 2, the system establishes:
-- **Local Canvas Engine**: Complete HTML5 Canvas rendering engine with High-DPI (Retina) scaling, infinite dot grid background, world-to-screen coordinate transforms, and responsive sizing via `ResizeObserver`.
-- **Structured Object Rendering**: Renderers for `rectangle`, `ellipse`, `line`, `stroke` (pencil), and `text` with full transform matrix support (`x`, `y`, `rotation`, `scaleX`, `scaleY`, `opacity`).
-- **Interactive Tools**: Floating workspace toolbar providing `Select & Move (V)`, `Rectangle (R)`, `Ellipse (O)`, `Line (L)`, `Pencil (P)`, `Text (T)`, and `Pan Canvas (H)` tools with live interactive preview.
-- **Selection & Manipulation**: Bounding box selection with corner resize handles (`nw`, `ne`, `se`, `sw`), drag-to-move, and keyboard deletion (`Delete` / `Backspace`).
-- **Viewport Navigation**: Infinite canvas panning via `Space + drag` or Pan tool, and pointer-centered mouse wheel zooming clamped between 10% and 500%.
-- **Local State Layer**: Pure state reducer (`useReducer`) managing `CanvasState` (`objects`, `objectOrder`, `version`, `metadata`).
-- **Testing**: Automated unit tests for coordinate conversions, geometry calculations, and geometric hit-testing.
-- **Backend**: Layered Express service (`server/src/config/`, `controllers/`, `routes/`, `types/`) serving `/api/health`.
+As of Day 3, the system establishes:
+- **User Authentication**: Secure user registration, credential verification, bcrypt password hashing (10 salt rounds), JWT Bearer token generation/verification, and current user retrieval (`/api/auth/me`).
+- **Room Management & Boundaries**: Mongoose `Room` and `Canvas` models with relational integrity (`User -> Room -> Canvas`), room creation, joining, leaving, and listing. Room owners are protected against accidental orphaning.
+- **Client Application State**: React `AuthProvider` with token storage, clean `LoginForm`, `RegisterForm`, and `Dashboard` UI with room creation and join-by-ID modals.
+- **Canvas Inside Room Context**: Canvases load within the authenticated room context, displaying room title, ID, and dashboard navigation.
+- **Canvas Interaction Hardening**:
+  - Pointer capture via `setPointerCapture` and safe release on `pointerup` and `pointercancel`.
+  - Thorough cleanup of all interaction refs to prevent stuck drawing or panning.
+  - Rotation-aware geometric hit testing for transformed rectangles.
+  - Robust 4-corner resizing enforcing non-negative, minimum dimensions (10px) with reverse drag stability.
+  - Pure reducer tests covering all state mutations, versioning, and timestamp updates.
+  - Defensive rendering guards preventing crashes on malformed shapes.
+  - Keyboard shortcut safety preventing tool changes when typing in inputs or content-editable elements.
+- **Testing**: Vitest suites for authentication, room authorization, security, geometry, coordinates, and reducer state mutations.
+
+> [!IMPORTANT]
+> Day 3 provides authentication and room boundaries. Real-time collaboration, WebSocket networking, and operational synchronization are not implemented yet.
 
 ## Target Architecture
 
@@ -104,7 +112,7 @@ The `CanvasViewport` maintains:
 
 ### 4. Rendering Pipeline
 
-Rendering is decoupled from React component lifecycles to guarantee 60 FPS performance:
+Rendering is decoupled from React component lifecycles to enable fluid, responsive performance:
 1. **Device Pixel Ratio Scaling**: Canvas backing store is scaled by `window.devicePixelRatio`, preventing blurriness on Retina screens while CSS width/height remains responsive.
 2. **Transform Reset**: Context matrix is cleared before each render frame.
 3. **Infinite Dot Grid**: Screen-space dot pattern generated dynamically based on modulo arithmetic of viewport pan and zoom.
@@ -116,7 +124,7 @@ Rendering is decoupled from React component lifecycles to guarantee 60 FPS perfo
 ### 5. Hit-Testing & Selection
 
 Hit testing determines object intersection in world coordinates:
-- **Rectangles**: Axis-aligned bounding box containment.
+- **Rectangles**: Rotation-aware geometric hit testing using inverse rotation transforms into local coordinate space.
 - **Ellipses**: Normalized quadratic distance check ($(\Delta x / r_x)^2 + (\Delta y / r_y)^2 \le 1$).
 - **Lines & Strokes**: Minimum Euclidean distance to line segments with configurable stroke tolerance.
 - **Reverse Z-Order Scanning**: Hit tests scan `objectOrder` in reverse order so the visually top-most object is selected first.

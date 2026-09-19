@@ -106,41 +106,123 @@ This document specifies the HTTP REST API boundaries for the Real-Time Collabora
   }
   ```
 
----
-
-## Planned Endpoints (Architectural Proposals — Not Yet Implemented)
-
-> [!NOTE]
-> The endpoints listed below represent architectural boundaries designed for subsequent implementation phases. None of these endpoints are active on Day 1.
-
-### 2. Create Collaboration Room
+### 6. Create Collaboration Room
 
 - **Endpoint**: `/api/rooms`
 - **Method**: `POST`
-- **Purpose**: Creates a new collaboration room and initializes an associated default canvas document.
+- **Purpose**: Creates a new collaboration room, initializes an associated default canvas document, and assigns the authenticated user as owner and first member.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
 - **Request Body**:
   ```json
   {
-    "name": "Sprint Retrospective Canvas"
+    "name": "Design Sprint Workspace"
   }
   ```
 - **Response**: `201 Created`
   ```json
   {
-    "roomId": "room_uuid_12345",
-    "canvasId": "canvas_uuid_67890",
-    "createdAt": 1773715200000
+    "id": "65f0a1b2c3d4e5f678901234",
+    "name": "Design Sprint Workspace",
+    "ownerId": "65f0a1b2c3d4e5f678900001",
+    "canvasId": "65f0a1b2c3d4e5f678909999",
+    "members": [
+      {
+        "userId": "65f0a1b2c3d4e5f678900001",
+        "role": "owner",
+        "joinedAt": "2026-09-19T18:00:00.000Z"
+      }
+    ],
+    "createdAt": "2026-09-19T18:00:00.000Z",
+    "updatedAt": "2026-09-19T18:00:00.000Z"
   }
   ```
 
-### 3. Get Room Details
+### 7. List User's Rooms
+
+- **Endpoint**: `/api/rooms`
+- **Method**: `GET`
+- **Purpose**: Lists all collaboration rooms where the authenticated user is a registered member.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "rooms": [
+      {
+        "id": "65f0a1b2c3d4e5f678901234",
+        "name": "Design Sprint Workspace",
+        "ownerId": "65f0a1b2c3d4e5f678900001",
+        "canvasId": "65f0a1b2c3d4e5f678909999",
+        "members": [ ... ],
+        "createdAt": "2026-09-19T18:00:00.000Z",
+        "updatedAt": "2026-09-19T18:00:00.000Z"
+      }
+    ]
+  }
+  ```
+
+### 8. Get Room Details
 
 - **Endpoint**: `/api/rooms/:roomId`
 - **Method**: `GET`
-- **Purpose**: Fetches metadata for an existing room, including authorized participants and linked canvas identifiers.
+- **Purpose**: Retrieves room metadata and canvas relationship for members of the room. Non-members receive `403 Forbidden`.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "id": "65f0a1b2c3d4e5f678901234",
+    "name": "Design Sprint Workspace",
+    "ownerId": "65f0a1b2c3d4e5f678900001",
+    "canvasId": "65f0a1b2c3d4e5f678909999",
+    "members": [ ... ],
+    "createdAt": "2026-09-19T18:00:00.000Z",
+    "updatedAt": "2026-09-19T18:00:00.000Z"
+  }
+  ```
+
+### 9. Join Collaboration Room
+
+- **Endpoint**: `/api/rooms/:roomId/join`
+- **Method**: `POST`
+- **Purpose**: Adds the authenticated user to the room's members list. Duplicate joins are idempotent and prevented.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
 - **Response**: `200 OK`
 
-### 4. Fetch Canvas Document
+### 10. Leave Collaboration Room
+
+- **Endpoint**: `/api/rooms/:roomId/leave`
+- **Method**: `POST`
+- **Purpose**: Removes the authenticated user from the room membership. Room owners are restricted from leaving to prevent room orphaning.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "message": "Successfully left the room"
+  }
+  ```
+
+---
+
+## Planned Endpoints (Architectural Proposals — Deferred to Future Days)
+
+> [!NOTE]
+> The endpoints listed below represent architectural boundaries designed for subsequent implementation phases (e.g. Day 8 full canvas snapshot persistence).
+
+### 11. Fetch Persisted Canvas Snapshot (Day 8)
 
 - **Endpoint**: `/api/canvases/:canvasId`
 - **Method**: `GET`

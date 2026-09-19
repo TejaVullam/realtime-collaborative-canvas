@@ -11,6 +11,8 @@ import type {
  * Applies common transforms (position, rotation, scale, opacity) and renders a single CanvasObject.
  */
 export function renderObject(ctx: CanvasRenderingContext2D, obj: CanvasObject): void {
+  if (!obj || !obj.type) return;
+
   ctx.save();
 
   // Apply object opacity
@@ -44,6 +46,10 @@ function renderRectangle(ctx: CanvasRenderingContext2D, obj: RectangleObject): v
   ctx.save();
   const width = obj.width * (obj.scaleX ?? 1);
   const height = obj.height * (obj.scaleY ?? 1);
+  if (width <= 0 || height <= 0) {
+    ctx.restore();
+    return;
+  }
 
   if (obj.rotation) {
     const centerX = obj.x + width / 2;
@@ -77,6 +83,10 @@ function renderEllipse(ctx: CanvasRenderingContext2D, obj: EllipseObject): void 
   ctx.save();
   const rx = Math.max(0, obj.radiusX * (obj.scaleX ?? 1));
   const ry = Math.max(0, obj.radiusY * (obj.scaleY ?? 1));
+  if (rx <= 0 || ry <= 0) {
+    ctx.restore();
+    return;
+  }
 
   ctx.beginPath();
   const rotationRad = ((obj.rotation ?? 0) * Math.PI) / 180;
@@ -103,6 +113,17 @@ function renderLine(ctx: CanvasRenderingContext2D, obj: LineObject): void {
   }
 
   const [p1, p2] = obj.points;
+  if (
+    !p1 ||
+    !p2 ||
+    typeof p1.x !== 'number' ||
+    typeof p1.y !== 'number' ||
+    typeof p2.x !== 'number' ||
+    typeof p2.y !== 'number'
+  ) {
+    ctx.restore();
+    return;
+  }
 
   if (obj.rotation) {
     const midX = (p1.x + p2.x) / 2;
@@ -124,7 +145,7 @@ function renderLine(ctx: CanvasRenderingContext2D, obj: LineObject): void {
 }
 
 function renderStroke(ctx: CanvasRenderingContext2D, obj: StrokeObject): void {
-  if (!obj.points || obj.points.length === 0) return;
+  if (!obj.points || obj.points.length < 2 || !obj.points[0]) return;
 
   ctx.save();
   ctx.beginPath();

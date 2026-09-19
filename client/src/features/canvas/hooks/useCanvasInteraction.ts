@@ -60,7 +60,14 @@ export function useCanvasInteraction({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          target.closest('input, textarea, [contenteditable="true"]'))
+      ) {
         return;
       }
 
@@ -110,6 +117,12 @@ export function useCanvasInteraction({
       pointerStartScreenRef.current = { x: screenX, y: screenY };
       pointerStartWorldRef.current = worldPoint;
       viewportStartRef.current = { ...viewport };
+
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Safe fallback for environments where pointer capture is unsupported
+      }
 
       if (isSpacePressedRef.current || activeTool === 'pan' || e.button === 1) {
         return;
@@ -214,28 +227,40 @@ export function useCanvasInteraction({
             newHeight = Math.max(10, initialBounds.height + dy);
           } else if (handle === 'sw') {
             const rawWidth = initialBounds.width - dx;
-            if (rawWidth > 10) {
+            if (rawWidth >= 10) {
               newX = initialBounds.minX + dx;
               newWidth = rawWidth;
+            } else {
+              newX = initialBounds.maxX - 10;
+              newWidth = 10;
             }
             newHeight = Math.max(10, initialBounds.height + dy);
           } else if (handle === 'ne') {
             newWidth = Math.max(10, initialBounds.width + dx);
             const rawHeight = initialBounds.height - dy;
-            if (rawHeight > 10) {
+            if (rawHeight >= 10) {
               newY = initialBounds.minY + dy;
               newHeight = rawHeight;
+            } else {
+              newY = initialBounds.maxY - 10;
+              newHeight = 10;
             }
           } else if (handle === 'nw') {
             const rawWidth = initialBounds.width - dx;
-            const rawHeight = initialBounds.height - dy;
-            if (rawWidth > 10) {
+            if (rawWidth >= 10) {
               newX = initialBounds.minX + dx;
               newWidth = rawWidth;
+            } else {
+              newX = initialBounds.maxX - 10;
+              newWidth = 10;
             }
-            if (rawHeight > 10) {
+            const rawHeight = initialBounds.height - dy;
+            if (rawHeight >= 10) {
               newY = initialBounds.minY + dy;
               newHeight = rawHeight;
+            } else {
+              newY = initialBounds.maxY - 10;
+              newHeight = 10;
             }
           }
 
@@ -360,6 +385,14 @@ export function useCanvasInteraction({
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // Safe fallback
+      }
+
       if (!isPointerDownRef.current) return;
       isPointerDownRef.current = false;
 
@@ -482,6 +515,25 @@ export function useCanvasInteraction({
     [viewport, activeTool, selectedColor, strokeWidth, generateId, canvasState.objectOrder.length, onAddObject],
   );
 
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // Safe fallback
+      }
+      isPointerDownRef.current = false;
+      activeResizeHandleRef.current = null;
+      initialObjectBoundsRef.current = null;
+      initialObjectPosRef.current = null;
+      activeStrokePointsRef.current = [];
+      setPreviewObject(null);
+    },
+    [],
+  );
+
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLCanvasElement>) => {
       e.preventDefault();
@@ -532,6 +584,10 @@ export function useCanvasInteraction({
 
   const handleCancelText = useCallback(() => {
     setTextInputState(null);
+    activeResizeHandleRef.current = null;
+    initialObjectBoundsRef.current = null;
+    initialObjectPosRef.current = null;
+    activeStrokePointsRef.current = [];
   }, []);
 
   const handleResetViewport = useCallback(() => {
@@ -554,6 +610,7 @@ export function useCanvasInteraction({
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    handlePointerCancel,
     handleWheel,
     handleConfirmText,
     handleCancelText,

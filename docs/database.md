@@ -13,43 +13,44 @@ The persistent layer will store long-lived workspace entities: registered users,
 
 ## 2. Conceptual Data Models
 
-### A. User Entity
+### A. User Entity (Active — Day 3)
 
 - **Purpose**: Represents an authenticated workspace member or registered collaborator.
 - **Key Fields**:
-  - `id`: Unique identifier (string / ObjectId).
-  - `email`: User's primary email address (unique, indexed).
-  - `name`: Display name.
-  - `avatarUrl`: Optional profile image URL.
-  - `createdAt`: Timestamp.
-  - `updatedAt`: Timestamp.
-- **Relationships**: One user can own multiple rooms and canvases; can be invited to multiple rooms.
+  - `_id` / `id`: Unique ObjectId.
+  - `email`: User's primary email address (unique, indexed, trimmed, lowercase).
+  - `name`: Display name (trimmed).
+  - `passwordHash`: Bcrypt hash (work factor 10 salt rounds, `select: false`).
+  - `createdAt`: ISO Date timestamp.
+  - `updatedAt`: ISO Date timestamp.
+- **Indexes**: `email: 1` (unique).
+- **Relationships**: One user owns many rooms; is a member of many rooms.
 
-### B. Room Entity
+### B. Room Entity (Active — Day 3)
 
-- **Purpose**: A collaboration session container that groups participants, permissions, and active canvases.
+- **Purpose**: Collaboration session container defining workspace boundaries and membership authorization.
 - **Key Fields**:
-  - `id`: Unique room identifier (e.g., UUID or nanoid).
+  - `_id` / `id`: Unique ObjectId.
   - `name`: Human-readable room title.
-  - `ownerId`: Foreign reference to `User.id`.
-  - `activeCanvasId`: Foreign reference to the current default `Canvas.id`.
-  - `isPublic`: Boolean flag governing open room access.
-  - `createdAt`: Timestamp.
-  - `updatedAt`: Timestamp.
-- **Relationships**: References one owner; contains many authorized participants; references one or more canvases.
+  - `ownerId`: Foreign reference to `User._id` (indexed).
+  - `canvasId`: Foreign reference to default associated `Canvas._id` (indexed).
+  - `members`: Array of `{ userId: ObjectId (ref User), role: 'owner' | 'member', joinedAt: Date }`.
+  - `createdAt`: ISO Date timestamp.
+  - `updatedAt`: ISO Date timestamp.
+- **Indexes**: `ownerId: 1`, `canvasId: 1`, `members.userId: 1`.
+- **Relationships**: Belongs to an owner `User`; contains authorized member `Users`; references an associated `Canvas`.
 
-### C. Canvas Entity
+### C. Canvas Entity (Active — Day 3 Foundation)
 
-- **Purpose**: Core document metadata representing an individual visual workspace.
+- **Purpose**: Document container representing an individual visual workspace linked to a Room.
 - **Key Fields**:
-  - `id`: Unique canvas identifier.
-  - `roomId`: Foreign reference to `Room.id`.
-  - `name`: Canvas title.
-  - `version`: Monotonically increasing version integer.
-  - `backgroundColor`: Default hex string (e.g., `#0f172a`).
-  - `createdAt`: Timestamp.
-  - `updatedAt`: Timestamp.
-- **Relationships**: Belongs to a single Room; has many historical `Operation` records and periodic `Snapshot` documents.
+  - `_id` / `id`: Unique ObjectId.
+  - `roomId`: Foreign reference to `Room._id` (indexed).
+  - `metadata`: `{ name: string, backgroundColor: string, ownerId: ObjectId, createdAt: number, updatedAt: number }`.
+  - `createdAt`: ISO Date timestamp.
+  - `updatedAt`: ISO Date timestamp.
+- **Indexes**: `roomId: 1`.
+- **Relationships**: Belongs to a single Room. Historical operation logs and snapshot persistence will be added in Day 8.
 
 ### D. Snapshot Entity
 

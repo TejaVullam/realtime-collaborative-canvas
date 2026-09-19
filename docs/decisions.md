@@ -72,3 +72,33 @@ This document records the architectural and design decisions made throughout the
     - Requires manual implementation of geometric hit-testing for selection.
     - Requires custom rendering of selection bounding boxes and resize handles.
     - Accessibility considerations require dedicated UI overlays.
+
+---
+
+## ADR-006: Authentication and Collaborative Room Management
+
+- **Status**: Accepted (Day 3)
+- **Context**: Real-time collaborative spaces require authenticated user identities, secure credential protection, and collaborative room boundaries (`User -> Room -> Canvas`) prior to introducing WebSocket infrastructure in Day 4.
+- **Decision**:
+  1. **Authentication Mechanism**: JWT (JSON Web Token) signed with HMAC-SHA256 via `jsonwebtoken`, passed via HTTP `Authorization: Bearer <token>` headers.
+  2. **Why Selected**:
+     - Eliminates CORS/SameSite cookie cross-origin restrictions between decoupled frontend (port 5173) and backend (port 5000) during development and preview deployments.
+     - Fully compatible with future Day 4 WebSockets, allowing tokens to be validated during the initial HTTP upgrade handshake (`ws://...?token=...`).
+  3. **Password Security**: Passwords hashed with `bcryptjs` (work factor 10 salt rounds). Plaintext passwords are never stored; `passwordHash` has `select: false` on Mongoose schema and is explicitly stripped from JSON responses.
+  4. **Room & Canvas Relationship**:
+     - `Room` entity maintains `ownerId`, `canvasId`, and an array of `members: [{ userId, role, joinedAt }]`.
+     - `Canvas` entity maintains `roomId` and canvas `metadata`.
+     - When a room is created, its default canvas document is automatically initialized.
+  5. **Authorization Boundaries**:
+     - Strict server-side verification: all protected room endpoints (`GET /api/rooms`, `POST /api/rooms`, `GET /api/rooms/:roomId`, `POST /api/rooms/:roomId/join`, `POST /api/rooms/:roomId/leave`) enforce authenticated membership.
+     - User identity is always resolved from the verified JWT payload (`req.user.id`), ignoring any client-supplied `userId`.
+     - Room owners are restricted from leaving their own rooms to prevent orphaning until room deletion or ownership transfer is built.
+- **Consequences**:
+  - **Benefits**:
+    - Clean architectural separation: Routes -> Controllers -> Services -> Mongoose Models.
+    - Safe error messages: login errors return generic responses to prevent user enumeration attacks.
+    - Future-proof WebSocket token integration.
+  - **Known Limitations**:
+    - No refresh token rotation or blacklisting yet; tokens expire in 7 days.
+    - Complex role-based access control (RBAC) and ownership transfer deferred to future days.
+    - Real-time synchronization is intentionally not implemented on Day 3.

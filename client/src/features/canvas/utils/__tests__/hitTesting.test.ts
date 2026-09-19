@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { hitTestObject, findTopObjectAtPoint, hitTestResizeHandle } from '../hitTesting.js';
-import type { RectangleObject, EllipseObject, LineObject, CanvasObject } from '../../../../types/canvas.js';
+import type { RectangleObject, EllipseObject, LineObject, CanvasObject, Point } from '../../../../types/canvas.js';
 
 describe('Hit Testing Utilities', () => {
   const rect: RectangleObject = {
@@ -102,5 +102,33 @@ describe('Hit Testing Utilities', () => {
 
     const miss = hitTestResizeHandle({ x: 50, y: 50 }, bounds, handleSize);
     expect(miss).toBeNull();
+  });
+
+  it('correctly performs rotation-aware hit testing for rotated rectangles', () => {
+    const rotatedRect: RectangleObject = {
+      ...rect,
+      rotation: 45, // Rotated 45 degrees around center (100, 100)
+    };
+
+    // Center point (100, 100) should be inside
+    expect(hitTestObject({ x: 100, y: 100 }, rotatedRect)).toBe(true);
+
+    // Top tip of the diamond extends to (100, 100 - 50 * sqrt(2)) ~ (100, 29.3)
+    // Point (100, 35) is inside the rotated diamond, but outside axis-aligned rect (minY=50)
+    expect(hitTestObject({ x: 100, y: 35 }, rotatedRect)).toBe(true);
+
+    // Old corner (55, 55) was inside unrotated rect, but is outside the rotated diamond
+    expect(hitTestObject({ x: 55, y: 55 }, rotatedRect)).toBe(false);
+  });
+
+  it('safely handles malformed and invalid objects without throwing', () => {
+    expect(hitTestObject({ x: 0, y: 0 }, null as unknown as CanvasObject)).toBe(false);
+    expect(hitTestObject(null as unknown as Point, rect)).toBe(false);
+
+    const zeroRect: RectangleObject = { ...rect, width: 0, height: 0 };
+    expect(hitTestObject({ x: 50, y: 50 }, zeroRect)).toBe(false);
+
+    const invalidLine: LineObject = { ...line, points: [] as unknown as [Point, Point] };
+    expect(hitTestObject({ x: 50, y: 50 }, invalidLine)).toBe(false);
   });
 });

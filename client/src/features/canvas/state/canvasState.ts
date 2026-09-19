@@ -60,6 +60,10 @@ export function canvasStateReducer(state: CanvasState, action: CanvasStateAction
           [id]: updated,
         },
         version: state.version + 1,
+        metadata: {
+          ...state.metadata,
+          updatedAt: Date.now(),
+        },
       };
     }
 
@@ -82,6 +86,10 @@ export function canvasStateReducer(state: CanvasState, action: CanvasStateAction
           [id]: updated,
         },
         version: state.version + 1,
+        metadata: {
+          ...state.metadata,
+          updatedAt: Date.now(),
+        },
       };
     }
 

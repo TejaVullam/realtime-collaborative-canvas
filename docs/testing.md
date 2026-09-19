@@ -4,13 +4,13 @@ This document outlines the testing methodology, active quality checks, automated
 
 ---
 
-## 1. Implemented Quality Checks & Automated Tests (Day 2)
+## 1. Implemented Quality Checks & Automated Tests (Day 3)
 
-As of Day 2, the following automated test suites and validation checks are operational:
+As of Day 3, the following automated test suites and validation checks are operational:
 
-### A. Unit Tests (Vitest)
+### A. Frontend Unit Tests (`client/`)
 
-A fast, lightweight unit test suite powered by Vitest executes via `npm test` in `client/`:
+A fast unit test suite powered by Vitest executes via `npm test` in `client/`:
 
 1. **Coordinate Conversion Tests (`coordinates.test.ts`)**:
    - Screen-to-world coordinate un-projection with scale and pan offsets.
@@ -18,26 +18,75 @@ A fast, lightweight unit test suite powered by Vitest executes via `npm test` in
    - Invariance of cursor world-space coordinate during mouse-wheel zooming.
    - Min/max zoom clamping ($0.1\times$ to $5.0\times$).
 2. **Geometry Utilities Tests (`geometry.test.ts`)**:
-   - Bounding box normalization for multi-directional drag gestures (top-left to bottom-right, bottom-right to top-left).
-   - Euclidean distance calculations.
-   - Point-to-line segment distance calculation.
-   - Axis-aligned bounding box extraction for rectangles and ellipses.
+   - Bounding box normalization for multi-directional drag gestures.
+   - Euclidean distance calculations and point-to-segment projection.
+   - Axis-aligned bounding box extraction for all primitives.
    - 4-corner resize handle generation (`nw`, `ne`, `se`, `sw`).
-3. **Hit-Testing Tests (`hitTesting.test.ts`)**:
+3. **Hit-Testing & Transformed Geometry Tests (`hitTesting.test.ts`)**:
    - Point-in-rectangle containment.
+   - Rotation-aware hit testing for rectangles transformed by arbitrary rotation angles.
    - Point-in-ellipse quadratic evaluation.
    - Point-to-line proximity within stroke threshold.
-   - Reverse z-order hit testing (verifies top-most object is selected first when elements overlap).
+   - Reverse z-order scanning ensuring top-most element selection.
    - Resize handle hit detection.
+   - Defensive guards for malformed/null objects.
+4. **Canvas State Reducer Tests (`canvasState.test.ts`)**:
+   - Initial state creation with clean defaults.
+   - `ADD_OBJECT`: object map insertion, deterministic order, version increment, `updatedAt` update.
+   - Deduplicated re-addition of modified object.
+   - `UPDATE_OBJECT`: patch merging, object and canvas `updatedAt` updates, graceful missing-object handling.
+   - `MOVE_OBJECT`: coordinate translation, timestamp updates, missing-object safety.
+   - `DELETE_OBJECT`: removal from object map and ordering array.
+   - `SET_STATE`: full state snapshot replacement.
 
-**Test Results Summary**:
+**Frontend Test Results Summary**:
 ```text
 ✓ src/features/canvas/utils/__tests__/coordinates.test.ts (4 tests)
 ✓ src/features/canvas/utils/__tests__/geometry.test.ts (7 tests)
-✓ src/features/canvas/utils/__tests__/hitTesting.test.ts (5 tests)
+✓ src/features/canvas/utils/__tests__/hitTesting.test.ts (7 tests)
+✓ src/features/canvas/state/__tests__/canvasState.test.ts (10 tests)
+
+Test Files  4 passed (4)
+Tests       28 passed (28)
+```
+
+### B. Backend Integration & Security Tests (`server/`)
+
+A comprehensive backend test suite executing via `npm test` in `server/` against local MongoDB:
+
+1. **Authentication Tests (`auth.test.ts`)**:
+   - Valid user registration with safe user data and JWT token.
+   - Password hashing verification (bcrypt hash in database, plaintext never persisted).
+   - Validation failures (invalid email, short passwords).
+   - Duplicate email conflict rejection (409 Conflict).
+   - Successful credential login.
+   - Login credential mismatch rejection (generic 401 Unauthorized, no email enumeration).
+   - Authenticated `/api/auth/me` with Bearer token.
+   - Unauthenticated and malformed token rejection.
+   - Logout endpoint response.
+2. **Room Management & Authorization Tests (`room.test.ts`)**:
+   - Authenticated room creation and automatic default canvas generation.
+   - Owner assigned as first room member.
+   - Unauthenticated access rejection.
+   - Room listing filtered strictly by user membership.
+   - Room detail retrieval authorized for members.
+   - Non-member access forbidden (403 Forbidden).
+   - Joining rooms with idempotency (no duplicate memberships).
+   - Non-owner member departure from rooms.
+   - Owner leave prevention (preventing orphaned rooms).
+3. **Security Suite (`security.test.ts`)**:
+   - Guarantee that `passwordHash` is never present in any endpoint response.
+   - Rejection of unauthenticated requests across all protected room endpoints.
+   - Identity verification: client cannot spoof `userId` in request payloads.
+
+**Backend Test Results Summary**:
+```text
+✓ src/__tests__/security.test.ts (3 tests)
+✓ src/__tests__/auth.test.ts (12 tests)
+✓ src/__tests__/room.test.ts (10 tests)
 
 Test Files  3 passed (3)
-Tests       16 passed (16)
+Tests       25 passed (25)
 ```
 
 ### B. Static Analysis & Compilation
