@@ -1,18 +1,36 @@
-import express from 'express';
-import cors from 'cors';
+import app from './app.js';
 import { config } from './config/index.js';
-import apiRoutes from './routes/index.js';
+import { connectDB, disconnectDB } from './config/database.js';
 
-const app = express();
+async function startServer() {
+  try {
+    await connectDB();
+    console.log(`Connected to MongoDB at ${config.mongoUri}`);
 
-app.use(cors());
-app.use(express.json());
+    const server = app.listen(config.port, () => {
+      console.log(`Server is running on port ${config.port} [${config.nodeEnv}]`);
+    });
 
-// API routes root
-app.use('/api', apiRoutes);
+    const handleShutdown = async (signal: string) => {
+      console.log(`Received ${signal}. Shutting down gracefully...`);
+      server.close(async () => {
+        await disconnectDB();
+        console.log('MongoDB connection closed. Server terminated.');
+        process.exit(0);
+      });
+    };
 
-app.listen(config.port, () => {
-  console.log(`Server is running on port ${config.port} [${config.nodeEnv}]`);
-});
+    process.on('SIGINT', () => handleShutdown('SIGINT'));
+    process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+// Only start when run directly
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
 export default app;

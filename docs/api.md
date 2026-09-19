@@ -19,6 +19,93 @@ This document specifies the HTTP REST API boundaries for the Real-Time Collabora
   }
   ```
 
+### 2. User Registration
+
+- **Endpoint**: `/api/auth/register`
+- **Method**: `POST`
+- **Purpose**: Registers a new user account with secure password hashing (bcrypt, 10 salt rounds) and returns safe user data and a JWT token.
+- **Request Body**:
+  ```json
+  {
+    "name": "Teja Vullam",
+    "email": "teja@example.com",
+    "password": "secure-password"
+  }
+  ```
+- **Response**: `201 Created`
+  ```json
+  {
+    "user": {
+      "id": "65f0a1b2c3d4e5f678901234",
+      "name": "Teja Vullam",
+      "email": "teja@example.com",
+      "createdAt": "2026-09-19T18:00:00.000Z"
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+  ```
+- **Errors**: `400 Bad Request` (validation failure), `409 Conflict` (email already registered).
+
+### 3. User Login
+
+- **Endpoint**: `/api/auth/login`
+- **Method**: `POST`
+- **Purpose**: Authenticates credentials and returns safe user data and a JWT session token.
+- **Request Body**:
+  ```json
+  {
+    "email": "teja@example.com",
+    "password": "secure-password"
+  }
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "user": {
+      "id": "65f0a1b2c3d4e5f678901234",
+      "name": "Teja Vullam",
+      "email": "teja@example.com",
+      "createdAt": "2026-09-19T18:00:00.000Z"
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  }
+  ```
+- **Errors**: `401 Unauthorized` (safe generic "Invalid email or password" error).
+
+### 4. Current Authenticated User
+
+- **Endpoint**: `/api/auth/me`
+- **Method**: `GET`
+- **Purpose**: Retrieves the currently authenticated user based on the provided JWT Bearer token.
+- **Headers**:
+  ```http
+  Authorization: Bearer <token>
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "user": {
+      "id": "65f0a1b2c3d4e5f678901234",
+      "name": "Teja Vullam",
+      "email": "teja@example.com",
+      "createdAt": "2026-09-19T18:00:00.000Z"
+    }
+  }
+  ```
+- **Errors**: `401 Unauthorized` (missing, expired, or invalid token).
+
+### 5. User Logout
+
+- **Endpoint**: `/api/auth/logout`
+- **Method**: `POST`
+- **Purpose**: Signals user logout and prompts client-side token invalidation.
+- **Response**: `200 OK`
+  ```json
+  {
+    "message": "Logged out successfully"
+  }
+  ```
+
 ---
 
 ## Planned Endpoints (Architectural Proposals — Not Yet Implemented)

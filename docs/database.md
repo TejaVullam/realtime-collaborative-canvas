@@ -1,7 +1,7 @@
 # Database Architecture & Conceptual Schema
 
-> [!WARNING]
-> Database integration has **NOT started as of Day 1**. No database connections (MongoDB or otherwise) or ORM/ODM models are implemented today. This document specifies the planned conceptual entity schema for Day 8 persistence.
+> [!NOTE]
+> Database integration has been initialized in **Day 3** using MongoDB and Mongoose. The `User` schema is currently active with unique indexes and password hash protection. The remaining models (`Room`, `Canvas`) are integrated for room boundaries, while temporal snapshots and operation log tables are planned for Day 8 persistence.
 
 ---
 
