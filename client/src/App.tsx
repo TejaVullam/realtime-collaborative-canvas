@@ -128,6 +128,7 @@ function AppContent() {
           roomName={activeRoom?.name || 'Collaborative Room'}
           roomId={activeRoom?.id}
           canvasId={activeRoom?.canvasId}
+          token={token}
           onBackToDashboard={() => {
             setActiveRoom(null);
             navigate('/dashboard');

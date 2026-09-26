@@ -7,11 +7,14 @@ import {
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction.js';
 import { CanvasToolbar } from './CanvasToolbar.js';
 import { CanvasStatusBar } from './CanvasStatusBar.js';
+import { useWebSocket } from '../../realtime/hooks/useWebSocket.js';
+import { ConnectionStatusBadge } from '../../realtime/components/ConnectionStatusBadge.js';
 
 export interface CanvasProps {
   roomName?: string;
   roomId?: string;
   canvasId?: string;
+  token?: string | null;
   onBackToDashboard?: () => void;
 }
 
@@ -19,8 +22,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   roomName,
   roomId,
   canvasId,
+  token,
   onBackToDashboard,
 }) => {
+  const { status: wsStatus, error: wsError } = useWebSocket({
+    roomId,
+    token,
+    autoConnect: Boolean(token),
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -157,7 +166,6 @@ export const Canvas: React.FC<CanvasProps> = ({
 
           {roomName && (
             <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 backdrop-blur-md text-xs flex items-center gap-2 shadow-lg">
-              <div className="w-2 h-2 rounded-full bg-emerald-400" />
               <span className="font-semibold text-white tracking-wide">
                 {roomName}
               </span>
@@ -167,6 +175,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </span>
               )}
             </div>
+          )}
+
+          {roomId && (
+            <ConnectionStatusBadge status={wsStatus} error={wsError} />
           )}
         </div>
       )}
