@@ -4,7 +4,7 @@
 
 ## Status
 
-✅ Day 3 — Authentication & Collaborative Rooms
+✅ Day 4 — WebSocket Infrastructure & Room Connectivity
 
 The project is currently under active development.
 
@@ -20,7 +20,7 @@ A collaborative digital canvas workspace designed for real-time visual collabora
 | Day 1 | Architecture foundation | ✅ |
 | Day 2 | Canvas engine | ✅ |
 | Day 3 | Authentication & rooms | ✅ |
-| Day 4 | WebSocket infrastructure | ⏳ |
+| Day 4 | WebSocket infrastructure | ✅ |
 | Day 5 | Real-time collaboration | ⏳ |
 | Day 6 | Synchronization & conflict resolution | ⏳ |
 | Day 7 | Presence & collaboration UX | ⏳ |
@@ -30,10 +30,17 @@ A collaborative digital canvas workspace designed for real-time visual collabora
 
 ## Features
 
-### Implemented (Days 0–3)
-- **User Authentication**: Secure registration and login with bcrypt password hashing (10 salt rounds), JWT Bearer token generation, and `/api/auth/me` profile verification.
-- **Collaborative Room Management**: Mongoose `Room` and `Canvas` models supporting room creation, room listing by member, room joining via ID, and departure with owner orphan protection.
-- **Client Workspace Dashboard**: Modern dark-mode UI with `LoginForm`, `RegisterForm`, and `Dashboard` allowing users to create rooms, join via ID, and launch into canvas workspaces.
+### Implemented (Days 0–4)
+- **WebSocket Infrastructure (Day 4)**: High-performance WebSocket server powered by `ws` attached to the shared Node HTTP server on `/ws`.
+- **Authenticated Sockets (Day 4)**: JWT verification during upgrade handshake binding identity securely into `AuthenticatedSocketContext`.
+- **In-Memory Room Management (Day 4)**: Dedicated `RoomManager` handling active socket memberships with automatic empty room garbage collection.
+- **Strict Server Room Authorization (Day 4)**: Sockets can only join real-time rooms if registered as members in MongoDB.
+- **Client Reconnection Strategy (Day 4)**: Resilient `WebSocketClient` service with bounded exponential backoff (1s to 16s) + jitter, explicit disconnect semantics, and automatic room re-joining.
+- **Connection Status UI (Day 4)**: Live `ConnectionStatusBadge` in canvas header tracking connection states (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`).
+- **Heartbeat & Health Monitoring (Day 4)**: 30-second ping/pong liveness checks and stale socket termination.
+- **User Authentication (Day 3)**: Secure registration and login with bcrypt password hashing (10 salt rounds), JWT Bearer token generation, and `/api/auth/me` profile verification.
+- **Collaborative Room Management (Day 3)**: Mongoose `Room` and `Canvas` models supporting room creation, room listing by member, room joining via ID, and departure with owner orphan protection.
+- **Client Workspace Dashboard (Day 3)**: Modern dark-mode UI with `LoginForm`, `RegisterForm`, and `Dashboard` allowing users to create rooms, join via ID, and launch into canvas workspaces.
 - **Canvas Inside Room Context**: Canvas loads with room context (room name, room ID, back-to-dashboard navigation).
 - **Canvas Interaction Hardening (Day 2.1)**:
   - Pointer capture (`setPointerCapture`) and safe release on `pointerup` and `pointercancel`.
@@ -43,14 +50,14 @@ A collaborative digital canvas workspace designed for real-time visual collabora
   - Pure state reducer unit tests covering `ADD_OBJECT`, `UPDATE_OBJECT`, `MOVE_OBJECT`, `DELETE_OBJECT`, and `SET_STATE`.
   - Defensive rendering guards preventing crashes on malformed shapes.
   - Keyboard shortcut isolation preventing tool changes during text input.
-- **HTML5 Canvas Rendering Engine**: 2D procedural rendering pipeline with infinite dot grid background and Retina scaling.
+- **HTML5 Canvas Rendering Engine (Day 2)**: 2D procedural rendering pipeline with infinite dot grid background and Retina scaling.
 - **Structured Object Rendering**: Native vector rendering for rectangles, ellipses, lines, freehand strokes, and text.
 - **Interactive Tool System**: Floating workspace toolbar providing `Select & Move (V)`, `Rectangle (R)`, `Ellipse (O)`, `Line (L)`, `Pencil (P)`, `Text (T)`, and `Pan Canvas (H)`.
 - **Viewport Navigation**: Pointer-centered mouse wheel zooming ($0.1\times$ to $5.0\times$) and infinite panning.
-- **Automated Test Suites**: 28 frontend unit tests + 25 backend integration & security tests (53 tests total, all passing).
+- **Automated Test Suites**: 37 frontend unit tests + 47 backend integration, RoomManager & WebSocket tests (84 tests total, 100% passing across 10 test files).
 
 ### Planned
-- Real-time WebSocket bidirectional communication (Day 4)
+- Real-time collaborative canvas operations (`CanvasOperation` broadcasting) (Day 5)
 - Live cursor presence and collaborative awareness (Day 5 & 7)
 - Multi-client operational state synchronization and conflict resolution (Day 5 & 6)
 - Persistent snapshots and operation history log in MongoDB (Day 8)

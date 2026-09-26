@@ -6,69 +6,106 @@ This document details the system architecture for the Real-Time Collaborative Ca
 
 The Real-Time Collaborative Canvas is designed as a decoupled, multi-user visual workspace enabling simultaneous manipulation of graphic entities with low latency, robust state synchronization, and reliable persistence.
 
-## Current Implementation (Day 3)
+## Current Implementation (Day 4)
 
-As of Day 3, the system establishes:
-- **User Authentication**: Secure user registration, credential verification, bcrypt password hashing (10 salt rounds), JWT Bearer token generation/verification, and current user retrieval (`/api/auth/me`).
-- **Room Management & Boundaries**: Mongoose `Room` and `Canvas` models with relational integrity (`User -> Room -> Canvas`), room creation, joining, leaving, and listing. Room owners are protected against accidental orphaning.
-- **Client Application State**: React `AuthProvider` with token storage, clean `LoginForm`, `RegisterForm`, and `Dashboard` UI with room creation and join-by-ID modals.
-- **Canvas Inside Room Context**: Canvases load within the authenticated room context, displaying room title, ID, and dashboard navigation.
-- **Canvas Interaction Hardening**:
-  - Pointer capture via `setPointerCapture` and safe release on `pointerup` and `pointercancel`.
-  - Thorough cleanup of all interaction refs to prevent stuck drawing or panning.
-  - Rotation-aware geometric hit testing for transformed rectangles.
-  - Robust 4-corner resizing enforcing non-negative, minimum dimensions (10px) with reverse drag stability.
-  - Pure reducer tests covering all state mutations, versioning, and timestamp updates.
-  - Defensive rendering guards preventing crashes on malformed shapes.
-  - Keyboard shortcut safety preventing tool changes when typing in inputs or content-editable elements.
-- **Testing**: Vitest suites for authentication, room authorization, security, geometry, coordinates, and reducer state mutations.
+As of Day 4, the system establishes:
+- **WebSocket Infrastructure**: Low-latency, bidirectional WebSocket server built with `ws` mounting directly on the shared Node.js HTTP server at `/ws`.
+- **Authenticated Sockets**: Handshake JWT authentication verifying credentials with `AuthService.verifyToken()` and binding immutable user identities into `AuthenticatedSocketContext`.
+- **In-Memory Room Management**: Dedicated `RoomManager` tracking active socket sets per room, cleanly separated from persistent MongoDB `Room` membership records, with automatic cleanup of empty rooms.
+- **Server Room Authorization**: Strict server-side verification ensuring clients can only join WebSocket rooms if they are registered members of the room in MongoDB.
+- **Client Real-Time Connectivity**: Client-side `WebSocketClient` service featuring bounded exponential backoff reconnection with jitter (1s to 16s), automatic room rejoining upon reconnect, and clean explicit disconnect semantics.
+- **Connection Status UI**: `ConnectionStatusBadge` displaying real-time connection state (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`) in the room canvas header.
+- **Heartbeat & Liveness**: 30-second ping/pong connection health monitor and dead socket pruning.
+- **User Authentication (Day 3)**: Secure user registration, credential verification, bcrypt password hashing, and JWT token issuance.
+- **Room Management (Day 3)**: MongoDB `Room` and `Canvas` models with relational integrity (`User -> Room -> Canvas`).
+- **Canvas Interaction Engine (Day 2 / 2.1)**: High-performance HTML5 2D canvas pipeline with pointer capture, geometric hit testing, transform matrix rendering, and viewport zoom/pan.
 
 > [!IMPORTANT]
-> Day 3 provides authentication and room boundaries. Real-time collaboration, WebSocket networking, and operational synchronization are not implemented yet.
+> Day 4 establishes the **communication and connectivity infrastructure**. Real-time canvas operation synchronization (`CanvasOperation`), CRDT/OT conflict resolution, live cursors, and presence awareness are **FUTURE — DAY 5 / DAY 6**.
 
 ## Target Architecture
 
-The long-term architecture adopts a reactive, event-driven model connecting distributed web clients to authoritative collaborative room processes backed by persistent storage.
+```text
+                         ┌──────────────┐
+                         │     User     │
+                         └──────┬───────┘
+                                │
+                         Authentication
+                                │
+                 ┌──────────────┴──────────────┐
+                 │                             │
+                 ▼                             ▼
+            REST API                     WebSocket
+                 │                             │
+                 ▼                             ▼
+             Room API                    Socket Auth
+                 │                             │
+                 │                       RoomManager
+                 │                             │
+                 └──────────────┬──────────────┘
+                                ▼
+                              Room
+                                │
+                                ▼
+                              Canvas
+                                │
+                                ▼
+                       LOCAL CANVAS STATE
+
+
+        FUTURE — DAY 5
+        ─────────────────
+        Canvas Action ──► CanvasOperation ──► WebSocket ──► Server Broadcast ──► Connected Users
+
+
+        FUTURE — DAY 6
+        ─────────────────
+        Concurrent Operations ──► Conflict Resolution / OT / CRDT
+```
 
 ```mermaid
 flowchart TD
   subgraph Client ["Client (Browser SPA)"]
-    UI["UI Layer (Active Toolbar & Status)"]
-    Interaction["Canvas Interaction Layer (Active)"]
-    Renderer["HTML5 Canvas Render Engine (Active)"]
-    State["Local Canvas State Store (Active)"]
+    UI["UI Layer (Toolbar & Status)"]
+    Interaction["Canvas Interaction Layer"]
+    Renderer["HTML5 Canvas Render Engine"]
+    State["Local Canvas State Store"]
     App["Application Orchestrator"]
-    WSClient["WebSocket Client (Planned - Day 4)"]
-    RESTClient["REST API Client"]
+    WSClient["WebSocket Client (Active - Day 4)"]
+    RESTClient["REST API Client (Active - Day 3)"]
+    Badge["ConnectionStatusBadge (Active - Day 4)"]
     
     UI --> Interaction
     Interaction --> State
     State --> Renderer
     Renderer --> HTMLCanvas["<canvas> Viewport"]
     State --> App
-    App -.-> WSClient
+    App --> WSClient
     App --> RESTClient
+    WSClient --> Badge
   end
 
-  subgraph Gateway ["Network Boundary"]
-    RESTClient -->|"HTTP / JSON"| RESTAPI["Express REST API (Active)"]
-    WSClient -.->|"WS / Events (Planned)"| WSGateway["WebSocket Server (Planned - Day 4)"]
+  subgraph Gateway ["Shared Node HTTP Server (Port 5000)"]
+    RESTClient -->|"HTTP / REST"| RESTAPI["Express REST API"]
+    WSClient -->|"WS Handshake /ws?token=..."| WSGateway["WebSocket Server (ws)"]
   end
 
   subgraph Server ["Backend Services"]
-    RESTAPI --> HealthController["Health Controller (Active)"]
-    RESTAPI -.-> RoomController["Room Controller (Planned - Day 3)"]
-    RESTAPI -.-> CanvasController["Canvas Controller (Planned - Day 3)"]
+    RESTAPI --> AuthRoutes["Auth Controller"]
+    RESTAPI --> RoomRoutes["Room Controller"]
     
-    WSGateway -.-> RoomManager["Room Coordinator (Planned)"]
-    WSGateway -.-> SyncEngine["Sync & Conflict Engine (Planned)"]
-    WSGateway -.-> PresenceService["Ephemeral Presence (Planned)"]
+    WSGateway --> WSAuth["Socket Authenticator (JWT)"]
+    WSAuth --> RoomManager["RoomManager (In-Memory Sockets)"]
+    
+    WSGateway -.->|"Future - Day 5"| CanvasOpHandler["CanvasOperation Broadcast"]
+    WSGateway -.->|"Future - Day 6"| SyncEngine["Sync & Conflict Engine"]
+    WSGateway -.->|"Future - Day 7"| PresenceService["Live Cursors & Presence"]
   end
 
-  subgraph Persistence ["Data & Storage (Planned - Day 8)"]
-    RoomManager -.-> DB[("Database / Snapshots")]
-    SyncEngine -.-> DB
-    SyncEngine -.-> Cache[("Redis Pub/Sub (If Required)")]
+  subgraph Persistence ["Persistent Storage"]
+    AuthRoutes --> MongoDB[("MongoDB: Users, Rooms, Canvases")]
+    RoomRoutes --> MongoDB
+    RoomManager -.->|"Validate Membership"| MongoDB
   end
 ```
 

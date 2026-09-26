@@ -102,3 +102,61 @@ This document records the architectural and design decisions made throughout the
     - No refresh token rotation or blacklisting yet; tokens expire in 7 days.
     - Complex role-based access control (RBAC) and ownership transfer deferred to future days.
     - Real-time synchronization is intentionally not implemented on Day 3.
+
+---
+
+## ADR-007: WebSocket Infrastructure Architecture
+
+- **Status**: Accepted (Day 4)
+- **Context**: Enabling real-time collaboration requires establishing a persistent, bidirectional communication channel between clients and the server before introducing canvas operation synchronization in Day 5. Key architectural needs include authenticated socket lifecycles, room boundary isolation, structured message typing, reconnection resiliency, and connection health management.
+- **Decision**:
+  1. **WebSocket Technology**: Selected `ws` for the Node.js backend and the native browser `WebSocket` API for the frontend.
+  2. **Why Selected**:
+     - Minimalist, high-performance, and RFC-6455 compliant without the abstraction bloat or proprietary framing of Socket.io.
+     - Demonstrates foundational mastery of raw WebSocket connection upgrades, heartbeats, and room multiplexing.
+     - Native browser `WebSocket` eliminates third-party client bundles entirely.
+  3. **HTTP + WebSocket Integration**:
+     - Shared HTTP Server: The WebSocket server mounts directly onto the existing Node HTTP server instance (`port 5000`) and intercepts upgrade requests specifically directed to `/ws`.
+     - Non-colliding REST API routes (`/api/...`) continue functioning independently on the same server port and process.
+  4. **Authentication Strategy**:
+     - Handshake verification: The client passes its JWT via query parameter (`/ws?token=<jwt>`) or HTTP headers.
+     - Reuses `AuthService.verifyToken()` and `AuthService.getUserById()` as the single source of truth for token authenticity.
+     - Unauthenticated requests are rejected during the HTTP upgrade phase with `HTTP 401 Unauthorized` before establishing a WebSocket frame.
+     - Credentials and tokens are never logged.
+  5. **Socket Context**:
+     - Context record stores `socketId` (UUID), `userId` (MongoDB ObjectId), `user` profile, `connectedAt`, `currentRoomId`, and heartbeat state `isAlive`.
+     - Identity is strictly derived from the verified token, preventing client spoofing.
+  6. **Room Manager Design**:
+     - `RoomManager` maintains in-memory maps (`rooms: Map<roomId, Set<WebSocket>>` and `socketToRoom: Map<WebSocket, string>`).
+     - Distinct from persistent database state: MongoDB `Room` governs authoritative permissions, while `RoomManager` routes real-time broadcasts.
+     - Automatic garbage collection: when the last client leaves a room, the room Set is purged from memory.
+  7. **Message Envelope**:
+     - Standard envelope `{ type: string, requestId?: string, payload: T }` across all exchanges.
+     - Request correlation enabled by reflecting `requestId` in responses.
+     - Strict runtime validation of envelope structure, JSON format, and payload types.
+  8. **Connection Lifecycle**:
+     - Handshake (`/ws?token=...`) -> `CONNECTED` -> `JOIN_ROOM` -> `ROOM_JOINED` -> `LEAVE_ROOM` -> Disconnect.
+  9. **Reconnection Strategy**:
+     - Bounded exponential backoff with jitter: base delay 1,000 ms, maximum delay 16,000 ms, 10 maximum attempts.
+     - Automatic room rejoin: upon successful reconnection, the client automatically re-issues `JOIN_ROOM` for its previous room.
+     - Explicit disconnect: navigating to Dashboard or logging out cancels reconnect timers and tears down connections cleanly.
+  10. **Heartbeat Strategy**:
+      - 30-second interval running native `ws.ping()` / `ws.on('pong')` frames.
+      - Connections failing to respond across consecutive intervals are terminated via `ws.terminate()` to prevent socket leaks.
+  11. **Error Handling**:
+      - Structured `ERROR` envelopes with standardized error codes (`UNAUTHENTICATED`, `INVALID_MESSAGE`, `UNKNOWN_MESSAGE_TYPE`, `INVALID_ROOM_ID`, `ROOM_NOT_FOUND`, `ROOM_ACCESS_DENIED`, `NOT_IN_ROOM`, `SERVER_ERROR`).
+      - Malformed messages never crash the server process.
+  12. **Security Discipline**:
+      - Strict membership validation: clients can only join a WebSocket room if their `userId` exists in the MongoDB `Room.members` array.
+      - Message size cap: enforced 64 KB limit protects against denial-of-service attempts.
+  13. **Day 5 Compatibility**:
+      - Infrastructure messages (`JOIN_ROOM`, `LEAVE_ROOM`, `PING`, `CONNECTED`, etc.) are cleanly isolated from future canvas mutation operations (`CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `SYNC_STATE`).
+- **Consequences**:
+  - **Benefits**:
+    - Rock-solid, typed, and resilient communication foundation.
+    - Zero external broker dependencies for Day 4.
+    - Full test coverage across connection, authorization, rooms, and reconnection.
+  - **Known Limitations**:
+    - Single-instance Node process memory store: horizontally scaling across multiple backend instances will require a pub/sub layer (e.g., Redis Pub/Sub), deferred to later stages.
+    - Ephemeral room state is lost on server restart (persistent canvas and room data remain safe in MongoDB).
+    - Canvas operation broadcasting is intentionally deferred to Day 5.
