@@ -1,19 +1,30 @@
+import http from 'http';
 import app from './app.js';
 import { config } from './config/index.js';
 import { connectDB, disconnectDB } from './config/database.js';
+import { createWebSocketServer } from './websocket/index.js';
 
 async function startServer() {
   try {
     await connectDB();
     console.log(`Connected to MongoDB at ${config.mongoUri}`);
 
-    const server = app.listen(config.port, () => {
+    const httpServer = http.createServer(app);
+    const wsServer = createWebSocketServer(httpServer);
+
+    httpServer.listen(config.port, () => {
       console.log(`Server is running on port ${config.port} [${config.nodeEnv}]`);
     });
 
     const handleShutdown = async (signal: string) => {
       console.log(`Received ${signal}. Shutting down gracefully...`);
-      server.close(async () => {
+      try {
+        await wsServer.close();
+      } catch (err) {
+        console.error('Error closing WebSocket server:', err);
+      }
+
+      httpServer.close(async () => {
         await disconnectDB();
         console.log('MongoDB connection closed. Server terminated.');
         process.exit(0);
