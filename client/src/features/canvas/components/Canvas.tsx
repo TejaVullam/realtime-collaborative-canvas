@@ -10,6 +10,14 @@ import { CanvasStatusBar } from './CanvasStatusBar.js';
 import { useWebSocket } from '../../realtime/hooks/useWebSocket.js';
 import { ConnectionStatusBadge } from '../../realtime/components/ConnectionStatusBadge.js';
 
+import { defaultCollaborationService } from '../../realtime/services/collaborationService.js';
+import type {
+  CanvasObject,
+  CanvasOperation,
+  CreateObjectOperation,
+  DeleteObjectOperation,
+} from '../../../types/canvas.js';
+
 export interface CanvasProps {
   roomName?: string;
   roomId?: string;
@@ -35,12 +43,139 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [inputText, setInputText] = useState('');
 
+  // Stable Client ID for operation attribution
+  const clientIdRef = useRef<string>(
+    `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+  );
+
   // Local Canvas State Reducer
   const [canvasState, dispatch] = useReducer(
     canvasStateReducer,
     canvasId || 'local-canvas-1',
     createInitialCanvasState,
   );
+
+  // Subscribe to Remote Canvas Operations via CollaborationService
+  useEffect(() => {
+    if (!roomId) return;
+
+    const unsubscribe = defaultCollaborationService.subscribeToCanvasOperations(
+      (remoteOp) => {
+        dispatch({
+          type: 'APPLY_OPERATION',
+          source: 'remote',
+          operation: remoteOp,
+        });
+      },
+    );
+
+    return () => {
+      unsubscribe();
+      defaultCollaborationService.clearProcessedOperations();
+    };
+  }, [roomId]);
+
+  // Throttled operation transmission timers for smooth dragging
+  const lastSentTimeRef = useRef<Record<string, number>>({});
+  const pendingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Cleanup dangling timers on unmount
+  useEffect(() => {
+    return () => {
+      for (const timer of Object.values(pendingTimersRef.current)) {
+        clearTimeout(timer);
+      }
+      pendingTimersRef.current = {};
+    };
+  }, []);
+
+  // Local action: Object Creation
+  const handleAddObject = (obj: CanvasObject) => {
+    const op: CreateObjectOperation = {
+      operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      canvasId: roomId || canvasId || 'local-canvas-1',
+      type: 'CREATE_OBJECT',
+      objectId: obj.id,
+      timestamp: Date.now(),
+      clientId: clientIdRef.current,
+      payload: { object: obj },
+    };
+
+    // 1. Immediate local application for responsive 60fps UI
+    dispatch({ type: 'APPLY_OPERATION', source: 'local', operation: op });
+    // 2. Transmit through collaboration service
+    defaultCollaborationService.sendCanvasOperation(op);
+  };
+
+  // Local action: Object Update / Move
+  const handleUpdateObject = (id: string, patch: Partial<CanvasObject>) => {
+    const keys = Object.keys(patch);
+    const isPureMove =
+      keys.length > 0 &&
+      keys.every((k) => k === 'x' || k === 'y') &&
+      typeof patch.x === 'number' &&
+      typeof patch.y === 'number';
+
+    const op: CanvasOperation = isPureMove
+      ? {
+          operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          canvasId: roomId || canvasId || 'local-canvas-1',
+          type: 'MOVE_OBJECT',
+          objectId: id,
+          timestamp: Date.now(),
+          clientId: clientIdRef.current,
+          payload: { x: patch.x!, y: patch.y! },
+        }
+      : {
+          operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          canvasId: roomId || canvasId || 'local-canvas-1',
+          type: 'UPDATE_OBJECT',
+          objectId: id,
+          timestamp: Date.now(),
+          clientId: clientIdRef.current,
+          payload: { patch },
+        };
+
+    // 1. Immediate local application
+    dispatch({ type: 'APPLY_OPERATION', source: 'local', operation: op });
+
+    // 2. Throttled remote broadcast for mouse movements (40ms / 25fps) with guaranteed trailing delivery
+    const now = Date.now();
+    const lastSent = lastSentTimeRef.current[id] || 0;
+    const THROTTLE_MS = 40;
+
+    if (pendingTimersRef.current[id]) {
+      clearTimeout(pendingTimersRef.current[id]);
+      delete pendingTimersRef.current[id];
+    }
+
+    if (now - lastSent >= THROTTLE_MS) {
+      lastSentTimeRef.current[id] = now;
+      defaultCollaborationService.sendCanvasOperation(op);
+    } else {
+      pendingTimersRef.current[id] = setTimeout(() => {
+        lastSentTimeRef.current[id] = Date.now();
+        defaultCollaborationService.sendCanvasOperation(op);
+        delete pendingTimersRef.current[id];
+      }, THROTTLE_MS - (now - lastSent));
+    }
+  };
+
+  // Local action: Object Deletion
+  const handleDeleteObject = (id: string) => {
+    const op: DeleteObjectOperation = {
+      operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      canvasId: roomId || canvasId || 'local-canvas-1',
+      type: 'DELETE_OBJECT',
+      objectId: id,
+      timestamp: Date.now(),
+      clientId: clientIdRef.current,
+      payload: { objectId: id },
+    };
+
+    dispatch({ type: 'APPLY_OPERATION', source: 'local', operation: op });
+    defaultCollaborationService.sendCanvasOperation(op);
+  };
 
   // Canvas Interactions Hook
   const {
@@ -64,10 +199,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     handleResetViewport,
   } = useCanvasInteraction({
     canvasState,
-    onAddObject: (obj) => dispatch({ type: 'ADD_OBJECT', payload: obj }),
-    onUpdateObject: (id, patch) =>
-      dispatch({ type: 'UPDATE_OBJECT', payload: { id, patch } }),
-    onDeleteObject: (id) => dispatch({ type: 'DELETE_OBJECT', payload: { id } }),
+    onAddObject: handleAddObject,
+    onUpdateObject: handleUpdateObject,
+    onDeleteObject: handleDeleteObject,
   });
 
   // Responsive Container Sizing with ResizeObserver
