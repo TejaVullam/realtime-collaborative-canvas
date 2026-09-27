@@ -23,6 +23,7 @@ export class WebSocketClient {
   private isExplicitDisconnect = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private joinedRoomId: string | null = null;
 
   private readonly baseDelay: number;
   private readonly maxDelay: number;
@@ -80,6 +81,19 @@ export class WebSocketClient {
     }
   }
 
+  private cleanupSocket(ws: WebSocket): void {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+    if (
+      ws.readyState === WebSocket.OPEN ||
+      ws.readyState === WebSocket.CONNECTING
+    ) {
+      ws.close(1000, 'Client closed connection');
+    }
+  }
+
   connect(token: string, wsUrl?: string): void {
     if (wsUrl) {
       this.wsUrl = wsUrl;
@@ -100,6 +114,12 @@ export class WebSocketClient {
         this.socket.readyState === WebSocket.CONNECTING)
     ) {
       return;
+    }
+
+    // Clean up any stale socket references and listeners before creating a new one
+    if (this.socket) {
+      this.cleanupSocket(this.socket);
+      this.socket = null;
     }
 
     if (this.status !== 'reconnecting') {
@@ -134,10 +154,16 @@ export class WebSocketClient {
       };
 
       ws.onclose = () => {
-        this.socket = null;
+        if (this.socket) {
+          this.cleanupSocket(this.socket);
+          this.socket = null;
+        }
+        this.joinedRoomId = null; // Transport lost; server membership cleared
+
         if (this.isExplicitDisconnect) {
           this.setStatus('disconnected', null);
         } else {
+          // Temporary network failure: retain this.currentRoomId for auto-rejoin
           this.scheduleReconnect();
         }
       };
@@ -156,16 +182,18 @@ export class WebSocketClient {
       this.setStatus('connected', null);
 
       // If we were previously in a room, automatically re-join upon reconnection
-      if (this.currentRoomId) {
+      if (this.currentRoomId && this.joinedRoomId !== this.currentRoomId) {
         this.send('JOIN_ROOM', { roomId: this.currentRoomId });
       }
     } else if (message.type === 'ROOM_JOINED') {
       const payload = message.payload as { roomId?: string };
       if (payload && payload.roomId) {
         this.currentRoomId = payload.roomId;
+        this.joinedRoomId = payload.roomId;
       }
     } else if (message.type === 'ROOM_LEFT') {
       this.currentRoomId = null;
+      this.joinedRoomId = null;
     } else if (message.type === 'ERROR') {
       const payload = message.payload as { message?: string };
       this.lastError = payload?.message || 'WebSocket server error';
@@ -226,6 +254,7 @@ export class WebSocketClient {
     this.isExplicitDisconnect = true;
     this.token = null;
     this.currentRoomId = null;
+    this.joinedRoomId = null;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -233,14 +262,8 @@ export class WebSocketClient {
     }
 
     if (this.socket) {
-      const ws = this.socket;
+      this.cleanupSocket(this.socket);
       this.socket = null;
-      if (
-        ws.readyState === WebSocket.OPEN ||
-        ws.readyState === WebSocket.CONNECTING
-      ) {
-        ws.close(1000, 'Client closed connection');
-      }
     }
 
     this.setStatus('disconnected', null);
@@ -264,7 +287,21 @@ export class WebSocketClient {
   }
 
   joinRoom(roomId: string): void {
+    if (this.currentRoomId === roomId && this.joinedRoomId === roomId) {
+      // Already joined on this connection; ignore to avoid duplicate JOIN_ROOM
+      return;
+    }
+
+    // Room switching: leave previous room if different
+    if (this.currentRoomId && this.currentRoomId !== roomId) {
+      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        this.send('LEAVE_ROOM', { roomId: this.currentRoomId });
+      }
+      this.joinedRoomId = null;
+    }
+
     this.currentRoomId = roomId;
+
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.send('JOIN_ROOM', { roomId });
     }
@@ -275,7 +312,10 @@ export class WebSocketClient {
     if (targetRoom && this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.send('LEAVE_ROOM', { roomId: targetRoom });
     }
-    this.currentRoomId = null;
+    if (!roomId || roomId === this.currentRoomId) {
+      this.currentRoomId = null;
+      this.joinedRoomId = null;
+    }
   }
 
   subscribe<T = unknown>(

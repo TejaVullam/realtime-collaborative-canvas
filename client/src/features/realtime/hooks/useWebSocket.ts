@@ -35,25 +35,29 @@ export function useWebSocket({
     };
   }, [client]);
 
-  // Connect on token presence
+  // Effect A: Connection lifecycle (connect on token, disconnect on unmount or token removal)
   useEffect(() => {
     if (autoConnect && token) {
       client.connect(token);
     }
-  }, [autoConnect, token, client]);
-
-  // Join room when connected and roomId is present
-  useEffect(() => {
-    if (status === 'connected' && roomId) {
-      client.joinRoom(roomId);
-    }
 
     return () => {
-      if (roomId) {
-        client.leaveRoom(roomId);
-      }
+      // Component unmount or token removal: explicitly disconnect socket
+      client.disconnect();
     };
-  }, [status, roomId, client]);
+  }, [autoConnect, token, client]);
+
+  // Effect B: Room lifecycle (join room on mount/roomId change, leave room on roomId change or unmount)
+  // Crucial: status is NOT a dependency here so network failures do NOT trigger room leave!
+  useEffect(() => {
+    if (!roomId) return;
+
+    client.joinRoom(roomId);
+
+    return () => {
+      client.leaveRoom(roomId);
+    };
+  }, [roomId, client]);
 
   const send = useCallback(
     <T = unknown>(type: string, payload: T, requestId?: string): boolean => {
@@ -69,12 +73,28 @@ export function useWebSocket({
     [],
   );
 
+  const joinRoom = useCallback(
+    (targetRoomId: string) => {
+      clientRef.current.joinRoom(targetRoomId);
+    },
+    [],
+  );
+
+  const leaveRoom = useCallback(
+    (targetRoomId?: string) => {
+      clientRef.current.leaveRoom(targetRoomId);
+    },
+    [],
+  );
+
   return {
     status,
     isConnected: status === 'connected',
     error,
     send,
     subscribe,
+    joinRoom,
+    leaveRoom,
     client,
   };
 }

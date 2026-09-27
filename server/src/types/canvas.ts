@@ -135,6 +135,7 @@ export interface BaseOperation {
   timestamp: number;
   clientId: string;
   sequenceNumber?: number;
+  userId?: string;
 }
 
 export interface CreateObjectOperation extends BaseOperation {
@@ -144,10 +145,12 @@ export interface CreateObjectOperation extends BaseOperation {
   };
 }
 
+export type CanvasObjectPatch = Record<string, unknown>;
+
 export interface UpdateObjectOperation extends BaseOperation {
   type: 'UPDATE_OBJECT';
   payload: {
-    patch: Partial<Omit<CanvasObject, 'id' | 'type' | 'createdAt' | 'createdBy'>>;
+    patch: CanvasObjectPatch;
   };
 }
 

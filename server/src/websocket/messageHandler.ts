@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import mongoose from 'mongoose';
 import { Room } from '../models/Room.js';
+import type { CanvasOperation } from '../types/canvas.js';
+import { validateCanvasOperation } from './operationValidator.js';
 import type { RoomManager } from './roomManager.js';
 import type {
   AuthenticatedSocketContext,
@@ -24,6 +26,24 @@ export function sendError(
     type: 'ERROR',
     requestId,
     payload: {
+      code,
+      message,
+    },
+  });
+}
+
+export function sendCanvasOperationError(
+  socket: WebSocket,
+  code: WebSocketErrorCode,
+  message: string,
+  operationId?: string,
+  requestId?: string,
+): void {
+  sendJson(socket, {
+    type: 'CANVAS_OPERATION_ERROR',
+    requestId,
+    payload: {
+      operationId,
       code,
       message,
     },
@@ -224,6 +244,104 @@ export async function handleSocketMessage(
         requestId,
         payload: {
           roomId: leftRoomId || currentRoomId,
+        },
+      });
+      break;
+    }
+
+    case 'CANVAS_OPERATION': {
+      const currentRoomId = context.currentRoomId;
+      if (!currentRoomId) {
+        sendError(
+          socket,
+          'NOT_IN_ROOM',
+          'Socket must be inside an active room to submit canvas operations',
+          requestId,
+        );
+        return;
+      }
+
+      // Verify persistent room authorization in MongoDB
+      try {
+        const room = await Room.findById(currentRoomId);
+        if (!room) {
+          sendError(socket, 'ROOM_NOT_FOUND', 'Room not found', requestId);
+          return;
+        }
+
+        const isMember = room.members.some(
+          (m) => m.userId.toString() === context.userId,
+        );
+
+        if (!isMember) {
+          sendError(
+            socket,
+            'ROOM_ACCESS_DENIED',
+            'You are not an authorized member of this room',
+            requestId,
+          );
+          return;
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to verify room authorization';
+        sendError(socket, 'SERVER_ERROR', message, requestId);
+        return;
+      }
+
+      // Validate operation structure and payload
+      const validation = validateCanvasOperation(payload);
+      if (!validation.isValid) {
+        sendCanvasOperationError(
+          socket,
+          validation.code,
+          validation.message,
+          validation.operationId,
+          requestId,
+        );
+        return;
+      }
+
+      const operation = validation.operation;
+
+      // Duplicate operation detection
+      if (roomManager.hasProcessedOperation(operation.operationId)) {
+        sendCanvasOperationError(
+          socket,
+          'DUPLICATE_OPERATION',
+          `Operation "${operation.operationId}" was already processed`,
+          operation.operationId,
+          requestId,
+        );
+        return;
+      }
+
+      // Record operation to prevent duplicate processing
+      roomManager.recordProcessedOperation(operation.operationId);
+
+      // Bind server-authenticated user identity & room context (never trust client-supplied userId/roomId)
+      const broadcastOperation: CanvasOperation = {
+        ...operation,
+        canvasId: currentRoomId,
+        userId: context.userId,
+      };
+
+      // Broadcast to other room members (sender excluded to avoid duplicate local application)
+      roomManager.broadcastToRoom(
+        currentRoomId,
+        {
+          type: 'CANVAS_OPERATION',
+          payload: broadcastOperation,
+        },
+        socket,
+      );
+
+      // Return explicit ACK to the originating sender
+      sendJson(socket, {
+        type: 'CANVAS_OPERATION_ACK',
+        requestId,
+        payload: {
+          operationId: operation.operationId,
         },
       });
       break;

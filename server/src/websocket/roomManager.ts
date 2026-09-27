@@ -109,13 +109,44 @@ export class RoomManager {
     }
   }
 
+  private processedOperationIds: Set<string> = new Set();
+  private processedOperationOrder: string[] = [];
+  private static MAX_PROCESSED_OPS = 1000;
+
   /**
-   * Clear all rooms and socket mappings (useful for testing or shutdown).
+   * Check if an operationId has already been processed by the room manager.
+   */
+  hasProcessedOperation(operationId: string): boolean {
+    return this.processedOperationIds.has(operationId);
+  }
+
+  /**
+   * Record an operationId with bounded FIFO eviction to prevent memory leaks.
+   */
+  recordProcessedOperation(operationId: string): void {
+    if (this.processedOperationIds.has(operationId)) return;
+
+    if (this.processedOperationOrder.length >= RoomManager.MAX_PROCESSED_OPS) {
+      const oldest = this.processedOperationOrder.shift();
+      if (oldest) {
+        this.processedOperationIds.delete(oldest);
+      }
+    }
+
+    this.processedOperationIds.add(operationId);
+    this.processedOperationOrder.push(operationId);
+  }
+
+  /**
+   * Clear all rooms, socket mappings, and processed operation cache (useful for testing or shutdown).
    */
   clear(): void {
     this.rooms.clear();
     this.socketToRoom.clear();
+    this.processedOperationIds.clear();
+    this.processedOperationOrder = [];
   }
 }
 
 export const defaultRoomManager = new RoomManager();
+

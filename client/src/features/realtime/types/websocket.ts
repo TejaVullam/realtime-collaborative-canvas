@@ -1,3 +1,5 @@
+export type { CanvasOperation } from '../../../types/canvas.js';
+
 export type ConnectionStatus =
   | 'disconnected'
   | 'connecting'
@@ -8,14 +10,18 @@ export type ConnectionStatus =
 export type ClientMessageType =
   | 'JOIN_ROOM'
   | 'LEAVE_ROOM'
-  | 'PING';
+  | 'PING'
+  | 'CANVAS_OPERATION';
 
 export type ServerMessageType =
   | 'CONNECTED'
   | 'ROOM_JOINED'
   | 'ROOM_LEFT'
   | 'PONG'
-  | 'ERROR';
+  | 'ERROR'
+  | 'CANVAS_OPERATION'
+  | 'CANVAS_OPERATION_ACK'
+  | 'CANVAS_OPERATION_ERROR';
 
 export type WebSocketErrorCode =
   | 'UNAUTHENTICATED'
@@ -25,7 +31,11 @@ export type WebSocketErrorCode =
   | 'ROOM_NOT_FOUND'
   | 'ROOM_ACCESS_DENIED'
   | 'NOT_IN_ROOM'
-  | 'SERVER_ERROR';
+  | 'SERVER_ERROR'
+  | 'INVALID_OPERATION'
+  | 'INVALID_OPERATION_TYPE'
+  | 'INVALID_OPERATION_PAYLOAD'
+  | 'DUPLICATE_OPERATION';
 
 export interface BaseWebSocketMessage<T = unknown> {
   type: string;
@@ -74,6 +84,16 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface CanvasOperationAckPayload {
+  operationId: string;
+}
+
+export interface CanvasOperationErrorPayload {
+  operationId?: string;
+  code: WebSocketErrorCode;
+  message: string;
+}
+
 export type MessageHandler<T = unknown> = (
   payload: T,
   message: BaseWebSocketMessage<T>,
@@ -83,3 +103,4 @@ export type StatusListener = (
   status: ConnectionStatus,
   error?: string | null,
 ) => void;
+

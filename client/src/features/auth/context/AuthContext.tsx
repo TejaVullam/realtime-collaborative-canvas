@@ -6,6 +6,7 @@ import type {
 } from '../types/auth.js';
 import { authApi } from '../services/authApi.js';
 import { AuthContext } from './authContextDef.js';
+import { defaultWebSocketClient } from '../../realtime/services/websocketClient.js';
 
 const TOKEN_KEY = 'canvas_auth_token';
 
@@ -77,6 +78,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const logout = useCallback(() => {
+    defaultWebSocketClient.disconnect();
     authApi.logout();
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);

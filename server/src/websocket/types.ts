@@ -1,16 +1,21 @@
 import type { SafeUser } from '../types/auth.js';
+export type { CanvasOperation } from '../types/canvas.js';
 
 export type ClientMessageType =
   | 'JOIN_ROOM'
   | 'LEAVE_ROOM'
-  | 'PING';
+  | 'PING'
+  | 'CANVAS_OPERATION';
 
 export type ServerMessageType =
   | 'CONNECTED'
   | 'ROOM_JOINED'
   | 'ROOM_LEFT'
   | 'PONG'
-  | 'ERROR';
+  | 'ERROR'
+  | 'CANVAS_OPERATION'
+  | 'CANVAS_OPERATION_ACK'
+  | 'CANVAS_OPERATION_ERROR';
 
 export type WebSocketErrorCode =
   | 'UNAUTHENTICATED'
@@ -20,7 +25,11 @@ export type WebSocketErrorCode =
   | 'ROOM_NOT_FOUND'
   | 'ROOM_ACCESS_DENIED'
   | 'NOT_IN_ROOM'
-  | 'SERVER_ERROR';
+  | 'SERVER_ERROR'
+  | 'INVALID_OPERATION'
+  | 'INVALID_OPERATION_TYPE'
+  | 'INVALID_OPERATION_PAYLOAD'
+  | 'DUPLICATE_OPERATION';
 
 export interface BaseWebSocketMessage<T = unknown> {
   type: string;
@@ -64,6 +73,16 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface CanvasOperationAckPayload {
+  operationId: string;
+}
+
+export interface CanvasOperationErrorPayload {
+  operationId?: string;
+  code: WebSocketErrorCode;
+  message: string;
+}
+
 export interface AuthenticatedSocketContext {
   socketId: string;
   userId: string;
@@ -72,3 +91,4 @@ export interface AuthenticatedSocketContext {
   currentRoomId?: string;
   isAlive: boolean;
 }
+
