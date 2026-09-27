@@ -12,16 +12,20 @@ As of Day 4, the system establishes:
 - **WebSocket Infrastructure**: Low-latency, bidirectional WebSocket server built with `ws` mounting directly on the shared Node.js HTTP server at `/ws`.
 - **Authenticated Sockets**: Handshake JWT authentication verifying credentials with `AuthService.verifyToken()` and binding immutable user identities into `AuthenticatedSocketContext`.
 - **In-Memory Room Management**: Dedicated `RoomManager` tracking active socket sets per room, cleanly separated from persistent MongoDB `Room` membership records, with automatic cleanup of empty rooms.
-- **Server Room Authorization**: Strict server-side verification ensuring clients can only join WebSocket rooms if they are registered members of the room in MongoDB.
-- **Client Real-Time Connectivity**: Client-side `WebSocketClient` service featuring bounded exponential backoff reconnection with jitter (1s to 16s), automatic room rejoining upon reconnect, and clean explicit disconnect semantics.
-- **Connection Status UI**: `ConnectionStatusBadge` displaying real-time connection state (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`) in the room canvas header.
-- **Heartbeat & Liveness**: 30-second ping/pong connection health monitor and dead socket pruning.
+- **Real-Time Canvas Collaboration (Day 5)**: Multi-user operation synchronization pipeline:
+  $$\text{Canvas UI} \rightarrow \text{Local Canvas Interaction} \rightarrow \text{CanvasOperation} \rightarrow \text{CollaborationService} \rightarrow \text{WebSocketClient} \rightarrow \text{WebSocketServer} \rightarrow \text{RoomManager} \rightarrow \text{Remote Clients} \rightarrow \text{applyCanvasOperation} \rightarrow \text{Canvas State Reducer} \rightarrow \text{Canvas Render}$$
+- **Server Operation Validation & Authorization (Day 5)**: Strict runtime validation of operation envelopes and shape-specific payloads, persistent MongoDB room membership checks, sender exclusion, and client ACKs.
+- **Client Duplicate Protection (Day 5)**: Bounded FIFO sets (1,000 operation capacity) suppressing duplicate network messages and local broadcast reflections.
+- **Server Room Authorization (Day 4)**: Strict server-side verification ensuring clients can only join WebSocket rooms if they are registered members of the room in MongoDB.
+- **Client Real-Time Connectivity (Day 4 / 4.1)**: Client-side `WebSocketClient` service featuring bounded exponential backoff reconnection with jitter (1s to 16s), automatic room rejoining upon reconnect, and clean explicit disconnect semantics.
+- **Connection Status UI (Day 4)**: `ConnectionStatusBadge` displaying real-time connection state (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`) in the room canvas header.
+- **Heartbeat & Liveness (Day 4)**: 30-second ping/pong connection health monitor and dead socket pruning.
 - **User Authentication (Day 3)**: Secure user registration, credential verification, bcrypt password hashing, and JWT token issuance.
 - **Room Management (Day 3)**: MongoDB `Room` and `Canvas` models with relational integrity (`User -> Room -> Canvas`).
 - **Canvas Interaction Engine (Day 2 / 2.1)**: High-performance HTML5 2D canvas pipeline with pointer capture, geometric hit testing, transform matrix rendering, and viewport zoom/pan.
 
 > [!IMPORTANT]
-> Day 4 establishes the **communication and connectivity infrastructure**. Real-time canvas operation synchronization (`CanvasOperation`), CRDT/OT conflict resolution, live cursors, and presence awareness are **FUTURE — DAY 5 / DAY 6**.
+> Day 5 establishes **operation-based real-time canvas collaboration**. Advanced conflict resolution (CRDT / OT), live presence cursors, and persistent operation logging are **FUTURE — DAYS 6–7**.
 
 ## Target Architecture
 
@@ -53,9 +57,9 @@ As of Day 4, the system establishes:
                        LOCAL CANVAS STATE
 
 
-        FUTURE — DAY 5
-        ─────────────────
-        Canvas Action ──► CanvasOperation ──► WebSocket ──► Server Broadcast ──► Connected Users
+        DAY 5 — REAL-TIME COLLABORATION PIPELINE (Active)
+        ──────────────────────────────────────────────────
+        Canvas Action ──► CanvasOperation ──► CollaborationService ──► WebSocket ──► Server Validation ──► Room Broadcast ──► Remote Canvas Reducer
 
 
         FUTURE — DAY 6
@@ -69,18 +73,21 @@ flowchart TD
     UI["UI Layer (Toolbar & Status)"]
     Interaction["Canvas Interaction Layer"]
     Renderer["HTML5 Canvas Render Engine"]
-    State["Local Canvas State Store"]
+    State["Local Canvas State Store (canvasStateReducer)"]
     App["Application Orchestrator"]
-    WSClient["WebSocket Client (Active - Day 4)"]
+    CollabService["CollaborationService (Active - Day 5)"]
+    WSClient["WebSocket Client (Active - Day 4/4.1)"]
     RESTClient["REST API Client (Active - Day 3)"]
     Badge["ConnectionStatusBadge (Active - Day 4)"]
     
     UI --> Interaction
-    Interaction --> State
+    Interaction -->|Immediate Local Apply| State
+    Interaction -->|Create CanvasOperation| CollabService
+    CollabService -->|sendCanvasOperation| WSClient
+    WSClient -->|Incoming CANVAS_OPERATION| CollabService
+    CollabService -->|applyCanvasOperation| State
     State --> Renderer
     Renderer --> HTMLCanvas["<canvas> Viewport"]
-    State --> App
-    App --> WSClient
     App --> RESTClient
     WSClient --> Badge
   end
@@ -97,7 +104,8 @@ flowchart TD
     WSGateway --> WSAuth["Socket Authenticator (JWT)"]
     WSAuth --> RoomManager["RoomManager (In-Memory Sockets)"]
     
-    WSGateway -.->|"Future - Day 5"| CanvasOpHandler["CanvasOperation Broadcast"]
+    WSGateway -->|"Active - Day 5"| CanvasOpHandler["CanvasOperation Validation & Broadcast"]
+    CanvasOpHandler --> RoomManager
     WSGateway -.->|"Future - Day 6"| SyncEngine["Sync & Conflict Engine"]
     WSGateway -.->|"Future - Day 7"| PresenceService["Live Cursors & Presence"]
   end
@@ -106,7 +114,9 @@ flowchart TD
     AuthRoutes --> MongoDB[("MongoDB: Users, Rooms, Canvases")]
     RoomRoutes --> MongoDB
     RoomManager -.->|"Validate Membership"| MongoDB
+    CanvasOpHandler -.->|"Verify Room Membership"| MongoDB
   end
+```
 ```
 
 ## Canvas Engine Architecture (Day 2)

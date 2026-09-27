@@ -1,63 +1,155 @@
 # Synchronization Strategy
 
-> [!NOTE]
-> State synchronization is **under architectural evaluation** as of Day 1. No synchronization engine (OT, CRDT, or custom broker) has been implemented yet.
+> **Status: Operation-Based Real-Time Collaboration Implemented (Day 5)**.  
+> Day 5 implements operation-based message broadcasting between authenticated clients within isolated room boundaries. Advanced conflict resolution (CRDT / OT / LWW convergence) is intentionally scheduled for **Day 6**.
 
 ---
 
-## 1. Problem Statement
+## 1. Day 5 Architecture: Operation-Based Real-Time Collaboration
 
-In a multi-user collaborative canvas, multiple distributed clients modify shared graphical entities simultaneously over asynchronous, variable-latency network connections. Without a robust synchronization strategy, clients face:
-- Conflicting simultaneous modifications to identical objects (e.g., Alice changes fill color to red while Bob changes it to blue).
-- Race conditions during element reordering or concurrent object deletions.
-- Visual state divergence where different users perceive differing canvas states.
+Day 5 introduces the first multi-user synchronization layer using atomic operations (`CanvasOperation`).
+
+```text
+                               LOCAL CLIENT (Alice)
+                       ┌──────────────────────────────────┐
+                       │ User Interaction (Draw/Move/Del) │
+                       └─────────────────┬────────────────┘
+                                         ▼
+                       ┌──────────────────────────────────┐
+                       │     Create CanvasOperation       │
+                       └─────────┬──────────────────────┬─┘
+                                 │                      │
+             Immediate Local Apply                      │ Transmit
+                                 ▼                      ▼
+  ┌─────────────────────────────────────────┐  ┌──────────────────────────────────┐
+  │ dispatch({ type: 'APPLY_OPERATION',     │  │ CollaborationService             │
+  │            source: 'local', op })       │  │ .sendCanvasOperation(op)         │
+  └─────────────────────────────────────────┘  └────────────────┬─────────────────┘
+                                                                │
+                                                                ▼
+                                                       WebSocket Client
+                                                                │
+                                                                ▼  (CANVAS_OPERATION)
+                                                       WebSocket Server
+                                                                │
+                                                    1. Authenticate & Authorize
+                                                    2. Validate Operation & Shape
+                                                    3. Check Bounded Duplicates
+                                                    4. Bind Server User Identity
+                                                                │
+                                    ┌───────────────────────────┴───────────────────────────┐
+                                    ▼                                                       ▼
+                      Sender ACK (Alice)                                    Room Broadcast (Bob)
+             ┌──────────────────────────────────┐                  ┌──────────────────────────────────┐
+             │ CANVAS_OPERATION_ACK             │                  │ CANVAS_OPERATION                 │
+             │ { operationId }                  │                  │ { op, userId: 'alice' }          │
+             └──────────────────────────────────┘                  └────────────────┬─────────────────┘
+                                                                                    │
+                                                                                    ▼
+                                                                           REMOTE CLIENT (Bob)
+                                                                   ┌──────────────────────────────────┐
+                                                                   │ CollaborationService Listener    │
+                                                                   │ - Duplicate Check & Filter       │
+                                                                   └────────────────┬─────────────────┘
+                                                                                    │
+                                                                                    ▼
+                                                                   ┌──────────────────────────────────┐
+                                                                   │ dispatch({                       │
+                                                                   │   type: 'APPLY_OPERATION',       │
+                                                                   │   source: 'remote', op           │
+                                                                   │ })                               │
+                                                                   └────────────────┬─────────────────┘
+                                                                                    │
+                                                                                    ▼
+                                                                   ┌──────────────────────────────────┐
+                                                                   │ applyCanvasOperation(state, op)  │
+                                                                   └────────────────┬─────────────────┘
+                                                                                    │
+                                                                                    ▼
+                                                                   ┌──────────────────────────────────┐
+                                                                   │ Canvas State Reducer & Render    │
+                                                                   └──────────────────────────────────┘
+```
 
 ---
 
-## 2. Requirements
+## 2. Operation Lifecycle
 
-1. **Low Latency (<50ms local feel)**: Local interactions must render optimistically with zero perceptible user interface lag.
-2. **Consistency & Deterministic Convergence**: All clients participating in a room must ultimately converge on identical canvas state.
-3. **Duplicate Operation Handling**: Retried network requests must not duplicate objects or double-apply transformations (idempotency).
-4. **Resilient Reconnection**: Reconnecting clients must cleanly reconcile local uncommitted edits with remote changes that occurred during disconnects.
-5. **Conflict Handling**: Concurrent attribute edits on the same object must resolve deterministically (e.g., Last-Write-Wins based on logical clocks or attribute-level merging).
+### 2.1 The Atomic Unit: `CanvasOperation`
+State modifications are modeled strictly as discrete atomic operations rather than full canvas snapshots:
 
----
+```typescript
+export interface BaseOperation {
+  operationId: string;       // Unique UUID generated by client
+  canvasId: string;          // Room ID / Canvas context
+  type: CanvasOperationType; // 'CREATE_OBJECT' | 'UPDATE_OBJECT' | 'DELETE_OBJECT' | 'MOVE_OBJECT' | 'REORDER_OBJECT'
+  objectId: string;          // Target entity identifier
+  timestamp: number;         // Generation epoch (ms)
+  clientId: string;          // Originating browser tab session ID
+  sequenceNumber?: number;   // Optional sequence metadata
+  userId?: string;           // Injected strictly by server from authenticated context
+}
+```
 
-## 3. Candidate Approaches
+### 2.2 Local Operation Flow (0ms Latency)
+1. Local user draws, transforms, moves, or deletes a shape.
+2. An atomic `CanvasOperation` is synthesized with a unique `operationId`.
+3. The operation is dispatched immediately to `canvasStateReducer` with `source: 'local'`, executing `applyCanvasOperation(state, op)` with zero perceived latency (60fps rendering).
+4. `CollaborationService.sendCanvasOperation(op)` records the `operationId` in the local duplicate cache and transmits the operation over the WebSocket.
 
-### A. Server-Authoritative State with Optimistic Local Updates
-- **Mechanism**: The backend server maintains the single source of truth. The client renders changes optimistically, dispatches operations to the server, and reconciles upon receiving the server's ordered sequence.
-- **Pros**: Simple conceptual model, lightweight payload sizes, straightforward access control.
-- **Cons**: Requires continuous round-trip validation; network partitions can trigger noticeable rollbacks.
+### 2.3 Remote Operation Flow
+1. Incoming `CANVAS_OPERATION` arrives over WebSocket.
+2. `CollaborationService` checks its bounded duplicate set. If `operationId` was already processed (or originated locally), it is discarded.
+3. The verified operation is dispatched to `canvasStateReducer` with `source: 'remote'`.
+4. `applyCanvasOperation(state, op)` updates state deterministically without invoking synthetic DOM or pointer events.
+5. The canvas re-renders with the updated state.
 
-### B. Operational Transformation (OT)
-- **Mechanism**: Operations sent between clients are transformed against concurrently executed operations using transformation functions.
-- **Pros**: Mature in text editing paradigms (e.g., Google Docs).
-- **Cons**: Substantial mathematical complexity; high implementation burden for multi-property graphical canvas operations (geometry, z-indices, grouping).
-
-### C. Conflict-Free Replicated Data Types (CRDT)
-- **Mechanism**: Canvas objects are modeled as replicated data structures (e.g., LWW-Element-Set or Map CRDT) where operations commute mathematically, guaranteeing eventual consistency without a central coordinator.
-- **Pros**: Peer-to-peer friendly, robust offline capabilities, deterministic mathematical convergence.
-- **Cons**: Higher memory overhead (tombstones, metadata per attribute), larger state transfer footprints.
-
-### D. Hybrid Approach (Object-Level LWW + Server Sequencing)
-- **Mechanism**: Server acts as a sequencer assigning Lamport timestamps / sequence numbers. Within individual canvas objects, mutations apply Last-Write-Wins (LWW) at the property level.
-- **Pros**: Highly efficient for discrete canvas entities, avoids heavy CRDT metadata overhead while preserving deterministic convergence.
-
----
-
-## 4. Architectural Decision
-
-- **Status**: **Not finalized on Day 1**.
-- Selecting an implementation prematurely before testing canvas rendering performance (Day 2) and WebSocket networking (Days 4–5) risks locking into unnecessary complexity.
-- The `CanvasOperation` domain model defined in Day 1 is intentionally decoupled to support any of the candidate models.
+### 2.4 Sender Exclusion & Acknowledgment
+To prevent local operations from being applied twice (once on user interaction and once upon receiving the server's broadcast reflection), the server **excludes the originating socket** from the room broadcast:
+- **Originating client**: Receives `CANVAS_OPERATION_ACK` containing `operationId`.
+- **Other room members**: Receive `CANVAS_OPERATION` containing the verified operation and server-bound `userId`.
 
 ---
 
-## 5. Next Investigation
+## 3. Strict Server Validation & Authorization
 
-During Days 4–6, we will benchmark:
-1. Operation serialization overhead.
-2. Conflict frequencies in typical multi-user drawing scenarios.
-3. Complexity vs. performance trade-offs between Hybrid Server-Sequenced LWW and Map-based CRDTs.
+The server guards the real-time channel against malformed data, unauthorized access, and identity spoofing:
+1. **Authenticated Context**: The sending socket must be authenticated via JWT during handshake.
+2. **Room Boundary**: Sockets must be inside an active room (`NOT_IN_ROOM` error if not).
+3. **Persistent Membership**: The server queries MongoDB `Room.findById(currentRoomId)` and confirms `userId` is an authorized member (`ROOM_ACCESS_DENIED` error if not).
+4. **Operation Validation**: `validateCanvasOperation` validates envelope structure, timestamps, allowed types, and shape-specific payloads (`rectangle`, `ellipse`, `line`, `stroke`, `text`).
+5. **No Identity Spoofing**: Any client-provided `userId` in the message payload is disregarded and overwritten with `context.userId`.
+
+---
+
+## 4. Duplicate Operation Protection
+
+Network latency, retries, and broadcast reflection can lead to duplicate messages. Both client and server maintain bounded duplicate tracking:
+- **Structure**: A `Set<string>` paired with a FIFO eviction queue capped at `MAX_PROCESSED_OPS = 1000`.
+- **Eviction**: When the cache reaches 1,000 operation IDs, the oldest entry is evicted upon new additions.
+- **Idempotency**: Any message bearing an `operationId` present in the cache is safely suppressed.
+
+---
+
+## 5. Disconnection & Failure Behavior (Approach A)
+
+- **Local Functionality**: When disconnected or reconnecting, the local canvas engine remains fully functional for drawing and navigation.
+- **Controlled Transmission**: If the client is disconnected or not in an active room, `sendCanvasOperation` returns `false` and does not transmit.
+- **Transparency**: Connection status is continuously surfaced through the `ConnectionStatusBadge` (`Connecting...`, `Reconnecting...`, `Disconnected`).
+- **Resumption**: When the connection is re-established and the room is rejoined (`ROOM_JOINED`), real-time operation transmission automatically resumes.
+
+---
+
+## 6. Critical Boundaries: What Day 5 Does NOT Include
+
+> [!IMPORTANT]
+> **Day 5 provides real-time operation broadcasting, NOT conflict resolution.**
+
+Explicit limitations:
+1. **No CRDT / OT**: If Alice moves Rectangle X to $(100, 100)$ at the exact same moment Bob moves Rectangle X to $(500, 500)$, both operations are broadcast. The order of arrival at each client dictates the final position without mathematical convergence guarantees or transform matrix reconciliation.
+2. **No Persistent Operation Log**: Operations are broadcast ephemeral in-memory; operation logs are not yet committed to MongoDB.
+3. **No Horizontal Scaling**: Room broadcasting is currently in-memory via `RoomManager` on a single Node instance. Horizontal scaling with Redis Pub/Sub is deferred.
+4. **No True Offline Sync**: Edits made while disconnected are not queued for offline replay upon reconnect.
+
+**Day 6 Scope**: The Day 6 milestone will build directly on top of this operation pipeline to implement state synchronization correctness, deterministic ordering, and conflict resolution.
+

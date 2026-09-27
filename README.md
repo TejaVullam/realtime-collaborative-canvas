@@ -4,7 +4,7 @@
 
 ## Status
 
-✅ Day 4 — WebSocket Infrastructure & Room Connectivity
+✅ Day 5 of 10 — Real-Time Canvas Collaboration
 
 The project is currently under active development.
 
@@ -21,45 +21,34 @@ A collaborative digital canvas workspace designed for real-time visual collabora
 | Day 2 | Canvas engine | ✅ |
 | Day 3 | Authentication & rooms | ✅ |
 | Day 4 | WebSocket infrastructure | ✅ |
-| Day 5 | Real-time collaboration | ⏳ |
+| Day 5 | Real-time collaboration | ✅ |
 | Day 6 | Synchronization & conflict resolution | ⏳ |
 | Day 7 | Presence & collaboration UX | ⏳ |
 | Day 8 | Persistence & history | ⏳ |
 | Day 9 | Testing, polish & deployment | ⏳ |
-| Day 10 | Documentation & final release | ⏳ |
+| Day 10 | Final release | ⏳ |
 
 ## Features
 
-### Implemented (Days 0–4)
-- **WebSocket Infrastructure (Day 4)**: High-performance WebSocket server powered by `ws` attached to the shared Node HTTP server on `/ws`.
-- **Authenticated Sockets (Day 4)**: JWT verification during upgrade handshake binding identity securely into `AuthenticatedSocketContext`.
+### Implemented (Days 0–5)
+- **Real-Time Canvas Collaboration (Day 5)**: Real multi-user synchronization where operations created by one client are sent over WebSocket, server-validated, and applied to other connected room members in real time.
+- **Client CollaborationService (Day 5)**: Decoupled service abstraction managing operation dispatch, remote subscriptions, and bounded duplicate suppression.
+- **Pure Operation Application Engine (`applyCanvasOperation`) (Day 5)**: Centralized state mutation path handling `CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `MOVE_OBJECT`, and `REORDER_OBJECT` identically for both local interactions and remote broadcasts.
+- **Strict Server Validation & Authorization (Day 5)**: `validateCanvasOperation` strictly validates message envelopes and shape payloads (`rectangle`, `ellipse`, `line`, `stroke`, `text`), while verifying persistent MongoDB room authorization.
+- **Sender Exclusion & Server ACKs (Day 5)**: Server broadcasts remote operations only to other clients in the room and returns an explicit `CANVAS_OPERATION_ACK` to the sender, preventing local reflection and double application.
+- **Bounded Duplicate Protection (Day 5)**: Bounded FIFO sets (1,000 operation capacity) on both client and server prevent duplicate application and protect against memory leaks.
+- **Identity Spoofing Protection (Day 5)**: Server strictly binds `AuthenticatedSocketContext.userId` derived from the verified JWT, overriding any client-provided identity.
+- **WebSocket Infrastructure (Day 4 / 4.1)**: High-performance WebSocket server powered by `ws` attached to Node HTTP server on `/ws`, with lifecycle hardening, reconnection backoff with jitter, room identity retention on network drop, and explicit disconnect semantics.
 - **In-Memory Room Management (Day 4)**: Dedicated `RoomManager` handling active socket memberships with automatic empty room garbage collection.
-- **Strict Server Room Authorization (Day 4)**: Sockets can only join real-time rooms if registered as members in MongoDB.
-- **Client Reconnection Strategy (Day 4)**: Resilient `WebSocketClient` service with bounded exponential backoff (1s to 16s) + jitter, explicit disconnect semantics, and automatic room re-joining.
-- **Connection Status UI (Day 4)**: Live `ConnectionStatusBadge` in canvas header tracking connection states (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`).
-- **Heartbeat & Health Monitoring (Day 4)**: 30-second ping/pong liveness checks and stale socket termination.
 - **User Authentication (Day 3)**: Secure registration and login with bcrypt password hashing (10 salt rounds), JWT Bearer token generation, and `/api/auth/me` profile verification.
 - **Collaborative Room Management (Day 3)**: Mongoose `Room` and `Canvas` models supporting room creation, room listing by member, room joining via ID, and departure with owner orphan protection.
-- **Client Workspace Dashboard (Day 3)**: Modern dark-mode UI with `LoginForm`, `RegisterForm`, and `Dashboard` allowing users to create rooms, join via ID, and launch into canvas workspaces.
-- **Canvas Inside Room Context**: Canvas loads with room context (room name, room ID, back-to-dashboard navigation).
-- **Canvas Interaction Hardening (Day 2.1)**:
-  - Pointer capture (`setPointerCapture`) and safe release on `pointerup` and `pointercancel`.
-  - Comprehensive interaction ref cleanup preventing stuck drawing or panning states.
-  - Rotation-aware geometric hit testing for rotated rectangles.
-  - Robust 4-corner resizing enforcing minimum dimensions (10px) with stable reverse dragging.
-  - Pure state reducer unit tests covering `ADD_OBJECT`, `UPDATE_OBJECT`, `MOVE_OBJECT`, `DELETE_OBJECT`, and `SET_STATE`.
-  - Defensive rendering guards preventing crashes on malformed shapes.
-  - Keyboard shortcut isolation preventing tool changes during text input.
-- **HTML5 Canvas Rendering Engine (Day 2)**: 2D procedural rendering pipeline with infinite dot grid background and Retina scaling.
-- **Structured Object Rendering**: Native vector rendering for rectangles, ellipses, lines, freehand strokes, and text.
+- **HTML5 Canvas Rendering Engine (Day 2 / 2.1)**: 2D procedural rendering pipeline with infinite dot grid background, Retina scaling, pointer capture, geometric hit testing, transform matrix rendering, and viewport zoom/pan.
 - **Interactive Tool System**: Floating workspace toolbar providing `Select & Move (V)`, `Rectangle (R)`, `Ellipse (O)`, `Line (L)`, `Pencil (P)`, `Text (T)`, and `Pan Canvas (H)`.
-- **Viewport Navigation**: Pointer-centered mouse wheel zooming ($0.1\times$ to $5.0\times$) and infinite panning.
-- **Automated Test Suites**: 37 frontend unit tests + 47 backend integration, RoomManager & WebSocket tests (84 tests total, 100% passing across 10 test files).
+- **Automated Test Suites**: 55 frontend unit & collaboration tests + 59 backend integration, RoomManager & WebSocket tests (114 tests total, 100% passing across 14 test files).
 
 ### Planned
-- Real-time collaborative canvas operations (`CanvasOperation` broadcasting) (Day 5)
-- Live cursor presence and collaborative awareness (Day 5 & 7)
-- Multi-client operational state synchronization and conflict resolution (Day 5 & 6)
+- Synchronization correctness, ordering, and conflict resolution (OT / CRDT / LWW) (Day 6)
+- Live cursor presence, user color avatars, and selection indicators (Day 7)
 - Persistent snapshots and operation history log in MongoDB (Day 8)
 - Canvas export to PNG, SVG, and JSON (Day 9)
 - Production cloud deployment (Day 9)
@@ -146,4 +135,4 @@ The backend health check is accessible at `http://localhost:5000/api/health`.
 
 ## Project Status
 
-Day 3 of 10 — Authentication & Collaborative Rooms Complete
+Day 5 of 10 — Real-Time Canvas Collaboration Complete

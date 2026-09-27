@@ -134,12 +134,16 @@ This document records the architectural and design decisions made throughout the
      - Standard envelope `{ type: string, requestId?: string, payload: T }` across all exchanges.
      - Request correlation enabled by reflecting `requestId` in responses.
      - Strict runtime validation of envelope structure, JSON format, and payload types.
-  8. **Connection Lifecycle**:
-     - Handshake (`/ws?token=...`) -> `CONNECTED` -> `JOIN_ROOM` -> `ROOM_JOINED` -> `LEAVE_ROOM` -> Disconnect.
-  9. **Reconnection Strategy**:
+  8. **Connection Lifecycle vs. Room Lifecycle (Day 4.1 Hardening)**:
+     - Strict separation between transport connection lifecycle (mount, token, transport drop, reconnect backoff) and room membership lifecycle (`currentRoomId`, `joinRoom`, `leaveRoom`).
+     - A temporary network interruption (`connected` → `reconnecting`) preserves `currentRoomId`. The React `useWebSocket` hook decouples room membership from `status`, ensuring that `leaveRoom()` is not invoked during transient outages.
+     - Upon transport reconnection (`CONNECTED`), the client automatically re-issues `JOIN_ROOM(currentRoomId)` exactly once.
+     - Duplicate join protection: client tracks `joinedRoomId` and suppresses redundant `JOIN_ROOM` messages if already acknowledged.
+     - Room switching cleanly emits `LEAVE_ROOM` for the previous room before joining the new room.
+  9. **Reconnection Strategy & Explicit Disconnect (Day 4.1 Hardening)**:
      - Bounded exponential backoff with jitter: base delay 1,000 ms, maximum delay 16,000 ms, 10 maximum attempts.
-     - Automatic room rejoin: upon successful reconnection, the client automatically re-issues `JOIN_ROOM` for its previous room.
-     - Explicit disconnect: navigating to Dashboard or logging out cancels reconnect timers and tears down connections cleanly.
+     - Explicit disconnect: navigating away from Canvas (unmount) or user logout invokes `client.disconnect()`, which sets `isExplicitDisconnect = true`, clears all reconnect timers, purges socket event listeners, closes the physical socket (code 1000), and clears active room state.
+     - Prevents zombie sockets, duplicate listeners, and uncoordinated reconnection attempts.
   10. **Heartbeat Strategy**:
       - 30-second interval running native `ws.ping()` / `ws.on('pong')` frames.
       - Connections failing to respond across consecutive intervals are terminated via `ws.terminate()` to prevent socket leaks.
@@ -160,3 +164,52 @@ This document records the architectural and design decisions made throughout the
     - Single-instance Node process memory store: horizontally scaling across multiple backend instances will require a pub/sub layer (e.g., Redis Pub/Sub), deferred to later stages.
     - Ephemeral room state is lost on server restart (persistent canvas and room data remain safe in MongoDB).
     - Canvas operation broadcasting is intentionally deferred to Day 5.
+
+---
+
+## ADR-008: Operation-Based Real-Time Canvas Collaboration
+
+- **Status**: Accepted (Day 5)
+- **Context**:
+  With connection lifecycle and room infrastructure established in Days 4 and 4.1, Day 5 introduces the first real multi-user canvas synchronization layer. Multiple authenticated users inside the same room must see each other's creations, modifications, moves, and deletions in real time. We need to decide whether to transmit full canvas state snapshots or atomic operations, how to separate canvas UI from networking, how to ensure immediate responsiveness, and how to avoid broadcast reflection and duplicate application.
+- **Decision**:
+  1. **Operation-Based Synchronization over Snapshots**:
+     - Synchronize atomic `CanvasOperation` records (`CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `MOVE_OBJECT`, `REORDER_OBJECT`) rather than full canvas state snapshots.
+     - Sending a single operation ($<500\text{ bytes}$) is dramatically more bandwidth-efficient than transmitting hundreds of kilobytes of entire canvas JSON on every pointer interaction or mouse drag.
+  2. **Clean Architectural Layering**:
+     - Maintain strict separation of concerns:
+       $$\text{Canvas UI} \rightarrow \text{Interaction Hook} \rightarrow \text{CanvasOperation} \rightarrow \text{CollaborationService} \rightarrow \text{WebSocketClient} \rightarrow \text{Server Validation} \rightarrow \text{RoomManager Broadcast} \rightarrow \text{Remote Client} \rightarrow \text{applyCanvasOperation} \rightarrow \text{Canvas State Reducer} \rightarrow \text{Canvas Render}$$
+     - Canvas rendering and interaction hooks do not know WebSocket details or low-level sockets.
+     - WebSocket client does not manipulate React state directly.
+  3. **Local-First Immediate Application with Dedicated Operation Flow**:
+     - Local actions dispatch an `APPLY_OPERATION` action with `source: 'local'` to the canvas reducer immediately (0ms user interface latency, 60fps responsiveness).
+     - Local actions transmit the operation via `CollaborationService.sendCanvasOperation(operation)`.
+  4. **Sender Exclusion with Server Acknowledgment (ACK)**:
+     - Originating clients apply operations locally and receive a `CANVAS_OPERATION_ACK` containing `operationId`.
+     - Other connected clients in the room receive the `CANVAS_OPERATION` broadcast.
+     - This cleanly prevents the originating client from receiving an echo of its own action and applying the mutation twice.
+  5. **Server-Side Security & Authentication Binding**:
+     - The server never trusts client-supplied `userId` or `roomId`.
+     - `userId` is strictly bound from `AuthenticatedSocketContext.userId` derived from the verified JWT.
+     - `roomId` is taken from `AuthenticatedSocketContext.currentRoomId` and verified against MongoDB `Room.members` persistent membership.
+  6. **Strict Server Runtime Validation**:
+     - Implemented `validateCanvasOperation` to inspect envelopes, required identifiers, timestamps, and shape-specific payloads (`rectangle`, `ellipse`, `line`, `stroke`, `text`).
+     - Malformed or invalid operations are rejected with `CANVAS_OPERATION_ERROR` and never broadcast to room members.
+  7. **Bounded Duplicate Protection**:
+     - Both server (`RoomManager`) and client (`CollaborationService`) maintain bounded FIFO sets (up to 1,000 operation IDs) to identify and ignore duplicates.
+     - Memory cannot leak indefinitely because entries beyond 1,000 are evicted in FIFO order.
+  8. **Disconnection Failure Behavior (Approach A)**:
+     - When disconnected, local canvas interactions remain fully functional.
+     - Remote operation transmission is temporarily disabled (`sendCanvasOperation` returns `false`), and connection state is surfaced clearly via `ConnectionStatusBadge`.
+     - We explicitly avoid pretending operations are synchronized when disconnected; full offline reconciliation is deferred.
+- **Consequences**:
+  - **Benefits**:
+    - Real-time multi-user synchronization working reliably between multiple browsers.
+    - Zero perceptible lag for local drawing.
+    - Robust server authorization and room isolation preventing cross-room data leaks.
+    - Clean foundation for Day 6 synchronization conflict resolution.
+  - **Explicit Limitations (To Be Addressed in Day 6+)**:
+    - **No CRDT / OT yet**: Concurrent conflicting edits (e.g. Alice and Bob dragging the same object simultaneously) are not resolved through operational transformation or CRDTs.
+    - **No Persistent Operation History Log**: Operations are broadcast ephemeral in-memory; operation logs are not yet written to MongoDB.
+    - **No Horizontal Scaling**: Room broadcasting is bounded to the single Node.js process memory.
+
