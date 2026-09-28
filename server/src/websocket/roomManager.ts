@@ -109,32 +109,39 @@ export class RoomManager {
     }
   }
 
-  private processedOperationIds: Set<string> = new Set();
+  private processedOperationKeys: Set<string> = new Set();
   private processedOperationOrder: string[] = [];
   private static MAX_PROCESSED_OPS = 1000;
 
-  /**
-   * Check if an operationId has already been processed by the room manager.
-   */
-  hasProcessedOperation(operationId: string): boolean {
-    return this.processedOperationIds.has(operationId);
+  private getOpKey(canvasIdOrOpId: string, operationId?: string): string {
+    return operationId ? `${canvasIdOrOpId}:${operationId}` : canvasIdOrOpId;
   }
 
   /**
-   * Record an operationId with bounded FIFO eviction to prevent memory leaks.
+   * Check if an operation has already been processed by the room manager.
+   * Scoped to (canvasId, operationId) to prevent cross-canvas collisions.
    */
-  recordProcessedOperation(operationId: string): void {
-    if (this.processedOperationIds.has(operationId)) return;
+  hasProcessedOperation(canvasIdOrOpId: string, operationId?: string): boolean {
+    const key = this.getOpKey(canvasIdOrOpId, operationId);
+    return this.processedOperationKeys.has(key);
+  }
+
+  /**
+   * Record an operation key with bounded FIFO eviction to prevent memory leaks.
+   */
+  recordProcessedOperation(canvasIdOrOpId: string, operationId?: string): void {
+    const key = this.getOpKey(canvasIdOrOpId, operationId);
+    if (this.processedOperationKeys.has(key)) return;
 
     if (this.processedOperationOrder.length >= RoomManager.MAX_PROCESSED_OPS) {
       const oldest = this.processedOperationOrder.shift();
       if (oldest) {
-        this.processedOperationIds.delete(oldest);
+        this.processedOperationKeys.delete(oldest);
       }
     }
 
-    this.processedOperationIds.add(operationId);
-    this.processedOperationOrder.push(operationId);
+    this.processedOperationKeys.add(key);
+    this.processedOperationOrder.push(key);
   }
 
   /**
@@ -143,7 +150,7 @@ export class RoomManager {
   clear(): void {
     this.rooms.clear();
     this.socketToRoom.clear();
-    this.processedOperationIds.clear();
+    this.processedOperationKeys.clear();
     this.processedOperationOrder = [];
   }
 }

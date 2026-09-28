@@ -262,6 +262,7 @@ export async function handleSocketMessage(
       }
 
       // Verify persistent room authorization in MongoDB
+      let roomCanvasId: string;
       try {
         const room = await Room.findById(currentRoomId);
         if (!room) {
@@ -282,6 +283,9 @@ export async function handleSocketMessage(
           );
           return;
         }
+
+        // Derive authenticated canvasId: Authenticated Socket -> currentRoomId -> MongoDB Room -> Room.canvasId
+        roomCanvasId = room.canvasId ? room.canvasId.toString() : currentRoomId;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Failed to verify room authorization';
@@ -304,8 +308,8 @@ export async function handleSocketMessage(
 
       const operation = validation.operation;
 
-      // Duplicate operation detection
-      if (roomManager.hasProcessedOperation(operation.operationId)) {
+      // Duplicate operation detection scoped by canvasId and operationId
+      if (roomManager.hasProcessedOperation(roomCanvasId, operation.operationId)) {
         sendCanvasOperationError(
           socket,
           'DUPLICATE_OPERATION',
@@ -317,12 +321,12 @@ export async function handleSocketMessage(
       }
 
       // Record operation to prevent duplicate processing
-      roomManager.recordProcessedOperation(operation.operationId);
+      roomManager.recordProcessedOperation(roomCanvasId, operation.operationId);
 
-      // Bind server-authenticated user identity & room context (never trust client-supplied userId/roomId)
+      // Bind server-authenticated user identity & derived canvasId (never trust client-supplied userId/roomId)
       const broadcastOperation: CanvasOperation = {
         ...operation,
-        canvasId: currentRoomId,
+        canvasId: roomCanvasId,
         userId: context.userId,
       };
 

@@ -67,7 +67,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
 
   let userA: { id: string; token: string; email: string };
   let userB: { id: string; token: string; email: string };
-  let testRoom: { id: string; name: string };
+  let testRoom: { id: string; name: string; canvasId: string };
 
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
@@ -118,7 +118,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
 
     const room = await RoomService.createRoom('Design System Workshop', userA.id);
     await RoomService.joinRoom(room.id, userB.id);
-    testRoom = { id: room.id, name: room.name };
+    testRoom = { id: room.id, name: room.name, canvasId: room.canvasId };
   });
 
   function connect(token: string): Promise<{ ws: WebSocket }> {
@@ -163,7 +163,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
 
     // 3. Initialize simulated client canvas states
     let stateA: CanvasState = {
-      canvasId: testRoom.id,
+      canvasId: testRoom.canvasId,
       objects: {},
       objectOrder: [],
       version: 1,
@@ -201,7 +201,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
 
     const createOp: CanvasOperation = {
       operationId: 'op_pipeline_create',
-      canvasId: testRoom.id,
+      canvasId: testRoom.canvasId,
       type: 'CREATE_OBJECT',
       objectId: rectObj.id,
       timestamp: Date.now(),
@@ -230,7 +230,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
     // --- STEP B: User B moves the Rectangle ---
     const moveOp: CanvasOperation = {
       operationId: 'op_pipeline_move',
-      canvasId: testRoom.id,
+      canvasId: testRoom.canvasId,
       type: 'MOVE_OBJECT',
       objectId: rectObj.id,
       timestamp: Date.now(),
@@ -255,7 +255,7 @@ describe('Full Multi-User Pipeline Integration Suite (Client A ↔ Server ↔ Cl
     // --- STEP C: User A deletes the Rectangle ---
     const deleteOp: CanvasOperation = {
       operationId: 'op_pipeline_delete',
-      canvasId: testRoom.id,
+      canvasId: testRoom.canvasId,
       type: 'DELETE_OBJECT',
       objectId: rectObj.id,
       timestamp: Date.now(),

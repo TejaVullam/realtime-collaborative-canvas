@@ -31,8 +31,8 @@ describe('Real-Time Canvas Collaboration & Server Operation Pipeline Suite', () 
   let userA: { id: string; token: string; email: string };
   let userB: { id: string; token: string; email: string };
   let userC: { id: string; token: string; email: string };
-  let testRoomA: { id: string; name: string };
-  let testRoomB: { id: string; name: string };
+  let testRoomA: { id: string; name: string; canvasId: string };
+  let testRoomB: { id: string; name: string; canvasId: string };
 
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
@@ -94,11 +94,11 @@ describe('Real-Time Canvas Collaboration & Server Operation Pipeline Suite', () 
     // Create Room A owned by User A, with User B invited as member
     const roomA = await RoomService.createRoom('Workspace Alpha', userA.id);
     await RoomService.joinRoom(roomA.id, userB.id);
-    testRoomA = { id: roomA.id, name: roomA.name };
+    testRoomA = { id: roomA.id, name: roomA.name, canvasId: roomA.canvasId };
 
     // Create Room B owned by User C
     const roomB = await RoomService.createRoom('Workspace Beta', userC.id);
-    testRoomB = { id: roomB.id, name: roomB.name };
+    testRoomB = { id: roomB.id, name: roomB.name, canvasId: roomB.canvasId };
   });
 
   function connectClient(
@@ -291,6 +291,135 @@ describe('Real-Time Canvas Collaboration & Server Operation Pipeline Suite', () 
       ws.close();
     });
 
+    it('should reject CREATE_OBJECT with INVALID_OPERATION_PAYLOAD when base object attributes are invalid', async () => {
+      const { ws } = await connectClient(userA.token);
+      await joinRoom(ws, testRoomA.id);
+
+      const errPromise = waitForMessage<CanvasOperationErrorPayload>(ws, 'CANVAS_OPERATION_ERROR');
+      ws.send(
+        JSON.stringify({
+          type: 'CANVAS_OPERATION',
+          payload: {
+            operationId: 'op_bad_create_base',
+            type: 'CREATE_OBJECT',
+            objectId: 'rect-base-err',
+            clientId: 'client-1',
+            timestamp: Date.now(),
+            payload: {
+              object: {
+                id: 'rect-base-err',
+                type: 'rectangle',
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 50,
+                fill: '#fff',
+                stroke: '#000',
+                strokeWidth: 1,
+                rotation: 0,
+                scaleX: 1,
+                scaleY: 1,
+                opacity: 1.5, // Invalid: opacity must be <= 1
+                zIndex: 0,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            },
+          },
+        }),
+      );
+
+      const err = await errPromise;
+      expect(err.payload.code).toBe('INVALID_OPERATION_PAYLOAD');
+      expect(err.payload.message).toContain('opacity');
+      ws.close();
+    });
+
+    it('should reject UPDATE_OBJECT when attempting to modify immutable system fields', async () => {
+      const { ws } = await connectClient(userA.token);
+      await joinRoom(ws, testRoomA.id);
+
+      const errPromise = waitForMessage<CanvasOperationErrorPayload>(ws, 'CANVAS_OPERATION_ERROR');
+      ws.send(
+        JSON.stringify({
+          type: 'CANVAS_OPERATION',
+          payload: {
+            operationId: 'op_bad_update_system',
+            type: 'UPDATE_OBJECT',
+            objectId: 'rect-1',
+            clientId: 'client-1',
+            timestamp: Date.now(),
+            payload: {
+              patch: {
+                id: 'new-stolen-id', // Prohibited immutable system field
+                x: 100,
+              },
+            },
+          },
+        }),
+      );
+
+      const err = await errPromise;
+      expect(err.payload.code).toBe('INVALID_OPERATION_PAYLOAD');
+      expect(err.payload.message).toContain('immutable system field');
+      ws.close();
+    });
+
+    it('should reject UPDATE_OBJECT when patch contains unknown properties', async () => {
+      const { ws } = await connectClient(userA.token);
+      await joinRoom(ws, testRoomA.id);
+
+      const errPromise = waitForMessage<CanvasOperationErrorPayload>(ws, 'CANVAS_OPERATION_ERROR');
+      ws.send(
+        JSON.stringify({
+          type: 'CANVAS_OPERATION',
+          payload: {
+            operationId: 'op_bad_update_unknown',
+            type: 'UPDATE_OBJECT',
+            objectId: 'rect-1',
+            clientId: 'client-1',
+            timestamp: Date.now(),
+            payload: {
+              patch: {
+                unsupportedArbitraryProp: 'malicious',
+              },
+            },
+          },
+        }),
+      );
+
+      const err = await errPromise;
+      expect(err.payload.code).toBe('INVALID_OPERATION_PAYLOAD');
+      expect(err.payload.message).toContain('Unknown or disallowed patch property');
+      ws.close();
+    });
+
+    it('should reject UPDATE_OBJECT when patch object is empty', async () => {
+      const { ws } = await connectClient(userA.token);
+      await joinRoom(ws, testRoomA.id);
+
+      const errPromise = waitForMessage<CanvasOperationErrorPayload>(ws, 'CANVAS_OPERATION_ERROR');
+      ws.send(
+        JSON.stringify({
+          type: 'CANVAS_OPERATION',
+          payload: {
+            operationId: 'op_empty_patch',
+            type: 'UPDATE_OBJECT',
+            objectId: 'rect-1',
+            clientId: 'client-1',
+            timestamp: Date.now(),
+            payload: {
+              patch: {},
+            },
+          },
+        }),
+      );
+
+      const err = await errPromise;
+      expect(err.payload.code).toBe('INVALID_OPERATION_PAYLOAD');
+      ws.close();
+    });
+
     it('should reject MOVE_OBJECT with INVALID_OPERATION_PAYLOAD when coordinates are not finite numbers', async () => {
       const { ws } = await connectClient(userA.token);
       await joinRoom(ws, testRoomA.id);
@@ -347,7 +476,7 @@ describe('Real-Time Canvas Collaboration & Server Operation Pipeline Suite', () 
 
       const operation: CanvasOperation = {
         operationId: 'op_create_101',
-        canvasId: testRoomA.id,
+        canvasId: testRoomA.canvasId,
         type: 'CREATE_OBJECT',
         objectId: 'rect-collab-1',
         timestamp: Date.now(),
@@ -394,7 +523,7 @@ describe('Real-Time Canvas Collaboration & Server Operation Pipeline Suite', () 
       expect(broadcastMsg.payload.objectId).toBe('rect-collab-1');
       // Server must bind authenticated userId
       expect(broadcastMsg.payload.userId).toBe(userA.id);
-      expect(broadcastMsg.payload.canvasId).toBe(testRoomA.id);
+      expect(broadcastMsg.payload.canvasId).toBe(testRoomA.canvasId);
 
       // Confirm sender exclusion
       expect(senderReceivedBroadcast).toBe(false);

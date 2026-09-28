@@ -147,13 +147,15 @@ Tests       59 passed (59)
 - **ESLint Validation**: Zero lint errors or warnings across entire codebase.
 - **Production Build (`vite build`)**: Generates optimized production bundles in 1.8s.
 
-### D. Manual & Browser Verification (Browser Subagent)
-- **User Registration & Login**: Registered and authenticated new user `aliceday5@example.com` on `http://localhost:3000`.
-- **Room Creation**: Created room `Day 5 Collab Room` (ID: `b37493`) from Dashboard.
-- **Room Entry & Connection**: Entered room workspace, verified `ConnectionStatusBadge` rendered green "Connected" badge.
-- **Canvas Interaction**: Selected Rectangle tool, drew rectangle $(200, 200) \rightarrow (400, 350)$, verified status bar updated to `Objects: 1`.
-- **Multi-Shape Support**: Selected Ellipse tool, drew ellipse $(500, 200) \rightarrow (650, 350)$, verified status bar updated to `Objects: 2`.
-- **Clean Leave / Navigation**: Clicked "Dashboard" button, returned cleanly to dashboard without socket leakage or console errors.
+### D. Manual Single-Browser Verification
+- **Automated vs Manual Clarification**: Multi-client concurrent collaboration, room isolation, bidirectional sync, and pipeline lifecycle are verified comprehensively through automated integration suites (`canvasOperations.test.ts` and `canvasPipelineIntegration.test.ts`). Manual verification for Day 5 was conducted in a single browser session as a smoke test:
+  - **User Registration & Login**: Registered and authenticated user `aliceday5@example.com` on `http://localhost:3000`.
+  - **Room Creation**: Created room `Day 5 Collab Room` from Dashboard.
+  - **Room Entry & Connection**: Entered room workspace, verified `ConnectionStatusBadge` rendered green "Connected" badge.
+  - **Canvas Interaction**: Selected Rectangle tool, drew rectangle $(200, 200) \rightarrow (400, 350)$, verified status bar updated to `Objects: 1`.
+  - **Multi-Shape Support**: Selected Ellipse tool, drew ellipse $(500, 200) \rightarrow (650, 350)$, verified status bar updated to `Objects: 2`.
+  - **Clean Leave / Navigation**: Clicked "Dashboard" button, returned cleanly to dashboard without socket leakage or console errors.
+- **Two-Browser Manual Verification Status**: Simultaneous two-browser manual collaboration testing is conducted and documented specifically under Day 6 (Synchronization & Conflict Resolution).
 
 ---
 

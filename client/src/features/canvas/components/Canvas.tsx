@@ -26,6 +26,17 @@ export interface CanvasProps {
   onBackToDashboard?: () => void;
 }
 
+function getOrCreateSessionClientId(): string {
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    const stored = window.sessionStorage.getItem('collaborative_canvas_client_id');
+    if (stored) return stored;
+    const generated = `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    window.sessionStorage.setItem('collaborative_canvas_client_id', generated);
+    return generated;
+  }
+  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export const Canvas: React.FC<CanvasProps> = ({
   roomName,
   roomId,
@@ -43,10 +54,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [inputText, setInputText] = useState('');
 
-  // Stable Client ID for operation attribution
-  const clientIdRef = useRef<string>(
-    `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-  );
+  // Stable Client ID for operation attribution across the browser session
+  const clientIdRef = useRef<string>(getOrCreateSessionClientId());
 
   // Local Canvas State Reducer
   const [canvasState, dispatch] = useReducer(
@@ -89,11 +98,14 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, []);
 
+  // Effective canvas ID for operations
+  const effectiveCanvasId = canvasId || roomId || 'local-canvas-1';
+
   // Local action: Object Creation
   const handleAddObject = (obj: CanvasObject) => {
     const op: CreateObjectOperation = {
       operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      canvasId: roomId || canvasId || 'local-canvas-1',
+      canvasId: effectiveCanvasId,
       type: 'CREATE_OBJECT',
       objectId: obj.id,
       timestamp: Date.now(),
@@ -119,7 +131,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const op: CanvasOperation = isPureMove
       ? {
           operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          canvasId: roomId || canvasId || 'local-canvas-1',
+          canvasId: effectiveCanvasId,
           type: 'MOVE_OBJECT',
           objectId: id,
           timestamp: Date.now(),
@@ -128,7 +140,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
       : {
           operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          canvasId: roomId || canvasId || 'local-canvas-1',
+          canvasId: effectiveCanvasId,
           type: 'UPDATE_OBJECT',
           objectId: id,
           timestamp: Date.now(),
@@ -165,7 +177,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleDeleteObject = (id: string) => {
     const op: DeleteObjectOperation = {
       operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      canvasId: roomId || canvasId || 'local-canvas-1',
+      canvasId: effectiveCanvasId,
       type: 'DELETE_OBJECT',
       objectId: id,
       timestamp: Date.now(),
