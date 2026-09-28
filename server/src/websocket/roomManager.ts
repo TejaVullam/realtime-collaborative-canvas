@@ -1,8 +1,16 @@
 import { WebSocket } from 'ws';
+import type { CanonicalCanvasOperation } from '../types/canvas.js';
 
 export class RoomManager {
   private rooms: Map<string, Set<WebSocket>> = new Map();
   private socketToRoom: Map<WebSocket, string> = new Map();
+
+  // Canvas-scoped monotonically increasing sequence counter
+  private canvasSequences: Map<string, number> = new Map();
+
+  // Bounded in-memory operation history per canvas for reconnect synchronization
+  private canvasOperationLogs: Map<string, CanonicalCanvasOperation[]> = new Map();
+  private static MAX_HISTORY_PER_CANVAS = 1000;
 
   /**
    * Add a socket to a room. If the socket was in another room, leaves it first.
@@ -145,15 +153,86 @@ export class RoomManager {
   }
 
   /**
-   * Clear all rooms, socket mappings, and processed operation cache (useful for testing or shutdown).
+   * Get next monotonically increasing sequence number for a canvas.
+   * Scoped to canvasId to ensure canvas isolation.
+   */
+  getNextSequence(canvasId: string): number {
+    const current = this.canvasSequences.get(canvasId) || 0;
+    const next = current + 1;
+    this.canvasSequences.set(canvasId, next);
+    return next;
+  }
+
+  /**
+   * Get current highest sequence number for a canvas (0 if none processed yet).
+   */
+  getCurrentSequence(canvasId: string): number {
+    return this.canvasSequences.get(canvasId) || 0;
+  }
+
+  /**
+   * Set sequence counter directly (useful for testing or initializing state).
+   */
+  setSequence(canvasId: string, sequence: number): void {
+    this.canvasSequences.set(canvasId, sequence);
+  }
+
+  /**
+   * Record a canonical operation in the bounded in-memory operation history for reconnect synchronization.
+   */
+  recordCanonicalOperation(op: CanonicalCanvasOperation): void {
+    let log = this.canvasOperationLogs.get(op.canvasId);
+    if (!log) {
+      log = [];
+      this.canvasOperationLogs.set(op.canvasId, log);
+    }
+
+    log.push(op);
+
+    // Bounded FIFO eviction to protect server memory
+    if (log.length > RoomManager.MAX_HISTORY_PER_CANVAS) {
+      log.shift();
+    }
+  }
+
+  /**
+   * Retrieve operations that occurred strictly after sinceSequence for a given canvasId.
+   */
+  getOperationsSince(
+    canvasId: string,
+    sinceSequence: number,
+  ): {
+    operations: CanonicalCanvasOperation[];
+    oldestSequence: number;
+    currentSequence: number;
+    totalAvailable: number;
+  } {
+    const currentSequence = this.getCurrentSequence(canvasId);
+    const log = this.canvasOperationLogs.get(canvasId) || [];
+    const oldestSequence = log.length > 0 ? log[0].serverSequence : currentSequence;
+    const operations = log.filter((op) => op.serverSequence > sinceSequence);
+
+    return {
+      operations,
+      oldestSequence,
+      currentSequence,
+      totalAvailable: log.length,
+    };
+  }
+
+  /**
+   * Clear all rooms, socket mappings, sequences, and operation logs (useful for testing or shutdown).
    */
   clear(): void {
     this.rooms.clear();
     this.socketToRoom.clear();
     this.processedOperationKeys.clear();
     this.processedOperationOrder = [];
+    this.canvasSequences.clear();
+    this.canvasOperationLogs.clear();
   }
 }
 
 export const defaultRoomManager = new RoomManager();
+
 

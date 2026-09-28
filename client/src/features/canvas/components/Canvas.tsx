@@ -9,6 +9,7 @@ import { CanvasToolbar } from './CanvasToolbar.js';
 import { CanvasStatusBar } from './CanvasStatusBar.js';
 import { useWebSocket } from '../../realtime/hooks/useWebSocket.js';
 import { ConnectionStatusBadge } from '../../realtime/components/ConnectionStatusBadge.js';
+import type { SyncStatus } from '../../realtime/types/websocket.js';
 
 import { defaultCollaborationService } from '../../realtime/services/collaborationService.js';
 import type {
@@ -53,6 +54,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [inputText, setInputText] = useState('');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(
+    defaultCollaborationService.getSyncStatus(),
+  );
+
+  // Track synchronization status changes from CollaborationService
+  useEffect(() => {
+    return defaultCollaborationService.onSyncStatusChange(setSyncStatus);
+  }, []);
 
   // Stable Client ID for operation attribution across the browser session
   const clientIdRef = useRef<string>(getOrCreateSessionClientId());
@@ -63,6 +72,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     canvasId || 'local-canvas-1',
     createInitialCanvasState,
   );
+
+  // Effective canvas ID for operations
+  const effectiveCanvasId = canvasId || roomId || 'local-canvas-1';
+
+  // Catch up on missed operations after unexpected reconnect
+  useEffect(() => {
+    if (wsStatus === 'connected' && roomId) {
+      const seq = defaultCollaborationService.getLastAppliedSequence();
+      if (seq > 0) {
+        defaultCollaborationService.requestSync(effectiveCanvasId, seq);
+      }
+    }
+  }, [wsStatus, roomId, effectiveCanvasId]);
 
   // Subscribe to Remote Canvas Operations via CollaborationService
   useEffect(() => {
@@ -97,9 +119,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       pendingTimersRef.current = {};
     };
   }, []);
-
-  // Effective canvas ID for operations
-  const effectiveCanvasId = canvasId || roomId || 'local-canvas-1';
 
   // Local action: Object Creation
   const handleAddObject = (obj: CanvasObject) => {
@@ -324,7 +343,11 @@ export const Canvas: React.FC<CanvasProps> = ({
           )}
 
           {roomId && (
-            <ConnectionStatusBadge status={wsStatus} error={wsError} />
+            <ConnectionStatusBadge
+              status={wsStatus}
+              syncStatus={syncStatus}
+              error={wsError}
+            />
           )}
         </div>
       )}

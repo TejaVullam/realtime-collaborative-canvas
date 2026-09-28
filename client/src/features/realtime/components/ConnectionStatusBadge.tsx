@@ -1,25 +1,43 @@
 import React from 'react';
-import type { ConnectionStatus } from '../types/websocket.js';
+import type { ConnectionStatus, SyncStatus } from '../types/websocket.js';
 
 export interface ConnectionStatusBadgeProps {
   status: ConnectionStatus;
+  syncStatus?: SyncStatus;
   error?: string | null;
   className?: string;
 }
 
 export const ConnectionStatusBadge: React.FC<ConnectionStatusBadgeProps> = ({
   status,
+  syncStatus = 'synced',
   error,
   className = '',
 }) => {
   const getStatusConfig = () => {
     switch (status) {
       case 'connected':
+        if (syncStatus === 'syncing') {
+          return {
+            dotColor: 'bg-cyan-400',
+            ping: true,
+            textColor: 'text-cyan-300',
+            label: 'Syncing...',
+          };
+        }
+        if (syncStatus === 'diverged') {
+          return {
+            dotColor: 'bg-amber-400',
+            ping: false,
+            textColor: 'text-amber-300',
+            label: 'Resyncing...',
+          };
+        }
         return {
           dotColor: 'bg-emerald-400',
           ping: true,
           textColor: 'text-emerald-300',
-          label: 'Connected',
+          label: 'Synced',
         };
       case 'connecting':
         return {

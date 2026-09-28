@@ -195,4 +195,206 @@ describe('CollaborationService Unit Suite', () => {
     // Recent items must still be present
     expect(service.hasProcessed('op-bulk-1049')).toBe(true);
   });
+
+  describe('Day 6 — Sequence Ordering, Out-of-Order Buffering & Reconnect Catch-Up', () => {
+    it('should process operations in contiguous sequence order and advance lastAppliedSequence', () => {
+      const receivedOps: CanvasOperation[] = [];
+      service.subscribeToCanvasOperations((op) => receivedOps.push(op));
+
+      const op1: CanvasOperation = {
+        operationId: 'op-seq-1',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1000,
+        clientId: 'client-b',
+        serverSequence: 1,
+        serverTimestamp: 10000,
+        userId: 'user-b',
+        payload: { x: 10, y: 20 },
+      };
+
+      const op2: CanvasOperation = {
+        operationId: 'op-seq-2',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1010,
+        clientId: 'client-b',
+        serverSequence: 2,
+        serverTimestamp: 10010,
+        userId: 'user-b',
+        payload: { x: 30, y: 40 },
+      };
+
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', op1);
+      expect(receivedOps.length).toBe(1);
+      expect(service.getLastAppliedSequence()).toBe(1);
+
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', op2);
+      expect(receivedOps.length).toBe(2);
+      expect(service.getLastAppliedSequence()).toBe(2);
+    });
+
+    it('should ignore duplicate operations or operations with serverSequence <= lastAppliedSequence', () => {
+      service.setLastAppliedSequence(5);
+
+      const receivedOps: CanvasOperation[] = [];
+      service.subscribeToCanvasOperations((op) => receivedOps.push(op));
+
+      const staleOp: CanvasOperation = {
+        operationId: 'op-stale',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 900,
+        clientId: 'client-b',
+        serverSequence: 4, // Stale! Current is 5
+        serverTimestamp: 9000,
+        userId: 'user-b',
+        payload: { x: 5, y: 5 },
+      };
+
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', staleOp);
+      expect(receivedOps.length).toBe(0);
+      expect(service.getLastAppliedSequence()).toBe(5);
+    });
+
+    it('should buffer out-of-order operations, request sync for gap, and drain buffer when missing sequence arrives', () => {
+      const receivedOps: CanvasOperation[] = [];
+      const statusHistory: string[] = [];
+      service.onSyncStatusChange((st) => statusHistory.push(st));
+
+      service.subscribeToCanvasOperations((op) => receivedOps.push(op));
+
+      // Sequence 1 arrives
+      const op1: CanvasOperation = {
+        operationId: 'op-gap-1',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1000,
+        clientId: 'client-b',
+        serverSequence: 1,
+        serverTimestamp: 10000,
+        userId: 'user-b',
+        payload: { x: 10, y: 10 },
+      };
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', op1);
+      expect(service.getLastAppliedSequence()).toBe(1);
+      expect(receivedOps.length).toBe(1);
+
+      // Sequence 3 arrives prematurely (Sequence 2 was delayed by network jitter!)
+      const op3: CanvasOperation = {
+        operationId: 'op-gap-3',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1020,
+        clientId: 'client-b',
+        serverSequence: 3,
+        serverTimestamp: 10020,
+        userId: 'user-b',
+        payload: { x: 30, y: 30 },
+      };
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', op3);
+
+      // op3 must be buffered, not yet applied to state
+      expect(receivedOps.length).toBe(1);
+      expect(service.getBufferedCount()).toBe(1);
+      expect(service.getSyncStatus()).toBe('syncing');
+
+      // CollaborationService should have automatically sent a SYNC_REQUEST for the missing sequence
+      const syncRequests = mockWs.sentMessages.filter((m) => m.type === 'SYNC_REQUEST');
+      expect(syncRequests.length).toBe(1);
+      expect(syncRequests[0].payload).toEqual({
+        canvasId: 'room-1',
+        sinceSequence: 1,
+      });
+
+      // Now sequence 2 arrives
+      const op2: CanvasOperation = {
+        operationId: 'op-gap-2',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1010,
+        clientId: 'client-b',
+        serverSequence: 2,
+        serverTimestamp: 10010,
+        userId: 'user-b',
+        payload: { x: 20, y: 20 },
+      };
+      mockWs.simulateIncomingMessage('CANVAS_OPERATION', op2);
+
+      // Both op2 and buffered op3 must now be delivered in exact sequence order!
+      expect(receivedOps.length).toBe(3);
+      expect(receivedOps[1].operationId).toBe('op-gap-2');
+      expect(receivedOps[2].operationId).toBe('op-gap-3');
+      expect(service.getLastAppliedSequence()).toBe(3);
+      expect(service.getBufferedCount()).toBe(0);
+      expect(service.getSyncStatus()).toBe('synced');
+    });
+
+    it('should catch up on missed operations via SYNC_RESPONSE on reconnect', () => {
+      service.setLastAppliedSequence(10);
+
+      const receivedOps: CanvasOperation[] = [];
+      service.subscribeToCanvasOperations((op) => receivedOps.push(op));
+
+      // Client reconnects and server answers with missing operations 11 and 12
+      const missedOp11 = {
+        operationId: 'op-missed-11',
+        canvasId: 'room-1',
+        type: 'MOVE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1100,
+        clientId: 'client-c',
+        serverSequence: 11,
+        serverTimestamp: 11000,
+        userId: 'user-c',
+        payload: { x: 110, y: 110 },
+      };
+
+      const missedOp12 = {
+        operationId: 'op-missed-12',
+        canvasId: 'room-1',
+        type: 'UPDATE_OBJECT',
+        objectId: 'obj-1',
+        timestamp: 1200,
+        clientId: 'client-c',
+        serverSequence: 12,
+        serverTimestamp: 12000,
+        userId: 'user-c',
+        payload: { patch: { fill: '#00ff00' } },
+      };
+
+      mockWs.simulateIncomingMessage('SYNC_RESPONSE', {
+        canvasId: 'room-1',
+        operations: [missedOp12, missedOp11], // delivered out of order by transport
+        currentSequence: 12,
+        upToDate: false,
+      });
+
+      // CollaborationService sorts ascending and applies in order
+      expect(receivedOps.length).toBe(2);
+      expect(receivedOps[0].operationId).toBe('op-missed-11');
+      expect(receivedOps[1].operationId).toBe('op-missed-12');
+      expect(service.getLastAppliedSequence()).toBe(12);
+      expect(service.getSyncStatus()).toBe('synced');
+    });
+
+    it('should transition sync status to diverged upon SYNC_REQUIRED (e.g. history purged)', () => {
+      service.subscribeToCanvasOperations(() => {});
+
+      mockWs.simulateIncomingMessage('SYNC_REQUIRED', {
+        canvasId: 'room-1',
+        reason: 'HISTORY_PURGED',
+        currentSequence: 2000,
+      });
+
+      expect(service.getSyncStatus()).toBe('diverged');
+    });
+  });
 });
+

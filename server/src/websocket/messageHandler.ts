@@ -1,7 +1,7 @@
 import { WebSocket } from 'ws';
 import mongoose from 'mongoose';
 import { Room } from '../models/Room.js';
-import type { CanvasOperation } from '../types/canvas.js';
+import type { CanonicalCanvasOperation } from '../types/canvas.js';
 import { validateCanvasOperation } from './operationValidator.js';
 import type { RoomManager } from './roomManager.js';
 import type {
@@ -185,12 +185,15 @@ export async function handleSocketMessage(
           `[WS] Socket ${context.socketId} (user: ${context.userId}) joined room ${cleanRoomId}`,
         );
 
+        const cleanCanvasId = room.canvasId ? room.canvasId.toString() : cleanRoomId;
+
         sendJson(socket, {
           type: 'ROOM_JOINED',
           requestId,
           payload: {
             roomId: cleanRoomId,
             userId: context.userId,
+            canvasId: cleanCanvasId,
           },
         });
       } catch (err) {
@@ -323,29 +326,125 @@ export async function handleSocketMessage(
       // Record operation to prevent duplicate processing
       roomManager.recordProcessedOperation(roomCanvasId, operation.operationId);
 
-      // Bind server-authenticated user identity & derived canvasId (never trust client-supplied userId/roomId)
-      const broadcastOperation: CanvasOperation = {
+      // Assign monotonically increasing sequence number and authoritative server timestamp
+      const serverSequence = roomManager.getNextSequence(roomCanvasId);
+      const serverTimestamp = Date.now();
+
+      // Bind server-authoritative metadata: sequence, timestamp, authenticated userId, and actual canvasId
+      const canonicalOperation: CanonicalCanvasOperation = {
         ...operation,
         canvasId: roomCanvasId,
         userId: context.userId,
+        serverSequence,
+        serverTimestamp,
       };
 
-      // Broadcast to other room members (sender excluded to avoid duplicate local application)
+      // Record in bounded in-memory operation history for reconnect synchronization
+      roomManager.recordCanonicalOperation(canonicalOperation);
+
+      // Broadcast canonical operation to other room members (sender excluded to avoid duplicate local application)
       roomManager.broadcastToRoom(
         currentRoomId,
         {
           type: 'CANVAS_OPERATION',
-          payload: broadcastOperation,
+          payload: canonicalOperation,
         },
         socket,
       );
 
-      // Return explicit ACK to the originating sender
+      // Return explicit ACK with server-assigned sequence and timestamp to originating sender
       sendJson(socket, {
         type: 'CANVAS_OPERATION_ACK',
         requestId,
         payload: {
           operationId: operation.operationId,
+          canvasId: roomCanvasId,
+          serverSequence,
+          serverTimestamp,
+          status: 'accepted',
+        },
+      });
+      break;
+    }
+
+    case 'SYNC_REQUEST': {
+      const currentRoomId = context.currentRoomId;
+      if (!currentRoomId) {
+        sendError(
+          socket,
+          'NOT_IN_ROOM',
+          'Socket must be inside an active room to request synchronization',
+          requestId,
+        );
+        return;
+      }
+
+      let roomCanvasId: string;
+      try {
+        const room = await Room.findById(currentRoomId);
+        if (!room) {
+          sendError(socket, 'ROOM_NOT_FOUND', 'Room not found', requestId);
+          return;
+        }
+
+        const isMember = room.members.some(
+          (m) => m.userId.toString() === context.userId,
+        );
+
+        if (!isMember) {
+          sendError(
+            socket,
+            'ROOM_ACCESS_DENIED',
+            'You are not an authorized member of this room',
+            requestId,
+          );
+          return;
+        }
+
+        roomCanvasId = room.canvasId ? room.canvasId.toString() : currentRoomId;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to verify room authorization for sync';
+        sendError(socket, 'SERVER_ERROR', message, requestId);
+        return;
+      }
+
+      const syncPayload =
+        payload && typeof payload === 'object' && !Array.isArray(payload)
+          ? (payload as Record<string, unknown>)
+          : {};
+
+      const rawSinceSeq = syncPayload.sinceSequence;
+      const sinceSequence =
+        typeof rawSinceSeq === 'number' && Number.isFinite(rawSinceSeq) && rawSinceSeq >= 0
+          ? Math.floor(rawSinceSeq)
+          : 0;
+
+      const { operations, oldestSequence, currentSequence, totalAvailable } =
+        roomManager.getOperationsSince(roomCanvasId, sinceSequence);
+
+      // If client requests sinceSequence > 0, but server log has evicted that sequence
+      if (sinceSequence > 0 && totalAvailable > 0 && sinceSequence < oldestSequence - 1) {
+        sendJson(socket, {
+          type: 'SYNC_REQUIRED',
+          requestId,
+          payload: {
+            canvasId: roomCanvasId,
+            reason: 'HISTORY_PURGED',
+            currentSequence,
+          },
+        });
+        return;
+      }
+
+      sendJson(socket, {
+        type: 'SYNC_RESPONSE',
+        requestId,
+        payload: {
+          canvasId: roomCanvasId,
+          operations,
+          currentSequence,
+          upToDate: operations.length === 0,
         },
       });
       break;

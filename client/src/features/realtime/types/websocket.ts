@@ -1,4 +1,5 @@
-export type { CanvasOperation } from '../../../types/canvas.js';
+export type { CanvasOperation, CanonicalCanvasOperation } from '../../../types/canvas.js';
+import type { CanonicalCanvasOperation } from '../../../types/canvas.js';
 
 export type ConnectionStatus =
   | 'disconnected'
@@ -7,11 +8,14 @@ export type ConnectionStatus =
   | 'reconnecting'
   | 'error';
 
+export type SyncStatus = 'synced' | 'syncing' | 'diverged';
+
 export type ClientMessageType =
   | 'JOIN_ROOM'
   | 'LEAVE_ROOM'
   | 'PING'
-  | 'CANVAS_OPERATION';
+  | 'CANVAS_OPERATION'
+  | 'SYNC_REQUEST';
 
 export type ServerMessageType =
   | 'CONNECTED'
@@ -21,7 +25,9 @@ export type ServerMessageType =
   | 'ERROR'
   | 'CANVAS_OPERATION'
   | 'CANVAS_OPERATION_ACK'
-  | 'CANVAS_OPERATION_ERROR';
+  | 'CANVAS_OPERATION_ERROR'
+  | 'SYNC_RESPONSE'
+  | 'SYNC_REQUIRED';
 
 export type WebSocketErrorCode =
   | 'UNAUTHENTICATED'
@@ -35,7 +41,8 @@ export type WebSocketErrorCode =
   | 'INVALID_OPERATION'
   | 'INVALID_OPERATION_TYPE'
   | 'INVALID_OPERATION_PAYLOAD'
-  | 'DUPLICATE_OPERATION';
+  | 'DUPLICATE_OPERATION'
+  | 'SYNC_ERROR';
 
 export interface BaseWebSocketMessage<T = unknown> {
   type: string;
@@ -69,6 +76,7 @@ export interface ConnectedPayload {
 export interface RoomJoinedPayload {
   roomId: string;
   userId: string;
+  canvasId?: string;
 }
 
 export interface RoomLeftPayload {
@@ -86,12 +94,34 @@ export interface ErrorPayload {
 
 export interface CanvasOperationAckPayload {
   operationId: string;
+  canvasId?: string;
+  serverSequence?: number;
+  serverTimestamp?: number;
+  status?: 'accepted';
 }
 
 export interface CanvasOperationErrorPayload {
   operationId?: string;
   code: WebSocketErrorCode;
   message: string;
+}
+
+export interface SyncRequestPayload {
+  canvasId?: string;
+  sinceSequence?: number;
+}
+
+export interface SyncResponsePayload {
+  canvasId: string;
+  operations: CanonicalCanvasOperation[];
+  currentSequence: number;
+  upToDate: boolean;
+}
+
+export interface SyncRequiredPayload {
+  canvasId: string;
+  reason: 'HISTORY_PURGED' | 'INITIAL_SYNC' | 'SEQUENCE_GAP';
+  currentSequence: number;
 }
 
 export type MessageHandler<T = unknown> = (

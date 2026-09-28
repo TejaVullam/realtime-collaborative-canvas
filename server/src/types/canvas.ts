@@ -135,6 +135,8 @@ export interface BaseOperation {
   timestamp: number;
   clientId: string;
   sequenceNumber?: number;
+  serverSequence?: number;
+  serverTimestamp?: number;
   userId?: string;
 }
 
@@ -184,3 +186,10 @@ export type CanvasOperation =
   | DeleteObjectOperation
   | MoveObjectOperation
   | ReorderObjectOperation;
+
+export type CanonicalCanvasOperation = CanvasOperation & {
+  userId: string;
+  serverSequence: number;
+  serverTimestamp: number;
+};
+
