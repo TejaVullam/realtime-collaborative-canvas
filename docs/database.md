@@ -1,7 +1,7 @@
 # Database Architecture & Conceptual Schema
 
 > [!NOTE]
-> Database integration has been initialized in **Day 3** using MongoDB and Mongoose. The `User` schema is currently active with unique indexes and password hash protection. The remaining models (`Room`, `Canvas`) are integrated for room boundaries, while temporal snapshots and operation log tables are planned for Day 8 persistence.
+> Database integration has been initialized in **Day 3** using MongoDB and Mongoose. The `User`, `Room`, and `Canvas` schemas are currently active with relational integrity. In **Day 6**, an in-memory bounded operation history (up to 1,000 operations per canvas) is maintained within `RoomManager` for real-time synchronization catch-up. Permanent disk persistence of temporal snapshots and durable append-only operation logs is scheduled for **Day 8**.
 
 ---
 

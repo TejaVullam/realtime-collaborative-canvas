@@ -1,14 +1,14 @@
 # Testing Strategy
 
-This document outlines the testing methodology, active quality checks, automated test suites, and planned tests for the Real-Time Collaborative Canvas.
+This document outlines the testing methodology, active quality checks, automated test suites, and manual verification procedures for the Real-Time Collaborative Canvas.
 
 ---
 
-## 1. Implemented Quality Checks & Automated Tests (Day 5)
+## 1. Implemented Quality Checks & Automated Tests (Day 6)
 
-As of Day 5, the following automated test suites and validation checks are operational:
+As of Day 6, the following automated test suites and validation checks are operational:
 
-### A. Frontend Unit & Real-Time Collaboration Tests (`client/`)
+### A. Frontend Unit & Synchronization Tests (`client/`)
 
 A fast unit test suite powered by Vitest executes via `npm test` in `client/`:
 
@@ -38,143 +38,150 @@ A fast unit test suite powered by Vitest executes via `npm test` in `client/`:
    - `MOVE_OBJECT`: coordinate translation, timestamp updates, missing-object safety.
    - `DELETE_OBJECT`: removal from object map and ordering array.
    - `SET_STATE`: full state snapshot replacement.
-5. **Canvas Operation Reducer Tests (`canvasOperations.test.ts` - New in Day 5)**:
+5. **Canvas Operation Reducer & Conflict Resolution Tests (`canvasOperations.test.ts` - Extended in Day 6)**:
    - `applyCanvasOperation`: `CREATE_OBJECT` creation for rectangle, ellipse, line, stroke, and text objects.
    - `applyCanvasOperation`: `UPDATE_OBJECT` and `MOVE_OBJECT` attribute merging and coordinate translation.
    - Safe missing-object handling: unknown `objectId` mutations return state safely without crashing.
    - `applyCanvasOperation`: `DELETE_OBJECT` object removal and index cleanup.
    - `applyCanvasOperation`: `REORDER_OBJECT` safe array splice reordering.
    - `canvasStateReducer`: handles `APPLY_OPERATION` identically for `source: 'local'` and `source: 'remote'`.
-6. **CollaborationService Unit Tests (`collaborationService.test.ts` - New in Day 5)**:
+   - **Day 6 Conflict Resolution Suite**:
+     - *Field-level Last-Write-Wins (LWW)*: Independent fields merge cleanly when modified concurrently (e.g. `fill` and `strokeWidth`).
+     - *Attribute Collision Resolution*: Conflicting mutations on the same attribute resolve deterministically to the higher `serverTimestamp` / `serverSequence`.
+     - *Deletion Dominance*: Deleting an object completely nullifies concurrent or subsequent `UPDATE_OBJECT` / `MOVE_OBJECT` operations targeting that entity.
+     - *Idempotency*: Applying the identical canonical operation multiple times yields bit-for-bit identical state.
+     - *Multi-Client Convergence*: 3 independent simulated clients receiving canonical operations in sequence order converge to identical object states and z-indexes.
+6. **CollaborationService Unit & Sync Protocol Tests (`collaborationService.test.ts` - Extended in Day 6)**:
    - Operation dispatch over WebSocket when connected and joined to room.
-   - Controlled transmission rejection when disconnected or roomless (Section 19 Approach A).
+   - Controlled transmission rejection when disconnected or roomless.
    - Duplicate operation suppression: discards previously processed incoming remote operations.
    - Echo suppression: discards incoming remote broadcasts of locally generated operations.
    - Event subscription to `CANVAS_OPERATION_ACK` and `CANVAS_OPERATION_ERROR`.
    - Bounded cache protection: FIFO eviction at 1,000 operations preventing memory leaks.
-7. **WebSocket Client Service Tests (`websocketClient.test.ts` - Hardened in Day 4.1)**:
-   - Initial disconnected state verification.
-   - Connection lifecycle transition to `connecting` and `connected` upon server `CONNECTED` handshake.
-   - Room join and acknowledgement tracking.
-   - Retention of `currentRoomId` across unexpected network drops during reconnecting state.
-   - Automatic room re-joining sending `JOIN_ROOM` exactly once upon successful reconnect.
-   - Explicit `disconnect()` clearing timers, preventing reconnection, closing socket, and resetting state.
-   - Unmount and logout cleanup: `disconnect()` cancelling active reconnect timers immediately.
-   - Room switching: sending `LEAVE_ROOM` for old room before `JOIN_ROOM` for new room, preventing stale state.
-   - Duplicate join prevention: suppressing redundant `JOIN_ROOM` messages if already acknowledged.
-   - Reconnect exhaustion: transitioning to `error` and cleaning all timers after maximum attempts.
-   - Stale socket cleanup: detaching listeners from old sockets to prevent memory leaks and duplicate handlers.
+   - **Day 6 Synchronization Suite**:
+     - *Sequence-Ordered Processing*: Enforces in-order execution and advances `lastAppliedSequence`.
+     - *Duplicate / Outdated Suppression*: Discards operations where `serverSequence <= lastAppliedSequence`.
+     - *Out-of-Order Buffering & Gap Sync*: Buffers out-of-order sequence arrivals, sets `syncStatus = 'syncing'`, transmits `SYNC_REQUEST`, and automatically drains the buffer when missing sequence numbers arrive.
+     - *Reconnect Catch-Up*: Replays missing canonical operations via `SYNC_RESPONSE` on reconnect.
+     - *State Divergence Notification*: Transitions `syncStatus` to `diverged` upon receiving `SYNC_REQUIRED`.
+7. **WebSocket Client Service Tests (`websocketClient.test.ts`)**:
+   - Handshake lifecycle, automatic room rejoining upon reconnect, exponential backoff with jitter, clean explicit disconnection.
 
 **Frontend Test Results Summary**:
 ```text
 ✓ src/features/canvas/utils/__tests__/coordinates.test.ts (4 tests)
 ✓ src/features/canvas/state/__tests__/canvasState.test.ts (10 tests)
-✓ src/features/canvas/state/__tests__/canvasOperations.test.ts (8 tests)
-✓ src/features/realtime/__tests__/collaborationService.test.ts (6 tests)
+✓ src/features/canvas/state/__tests__/canvasOperations.test.ts (15 tests)
 ✓ src/features/canvas/utils/__tests__/geometry.test.ts (7 tests)
 ✓ src/features/canvas/utils/__tests__/hitTesting.test.ts (7 tests)
+✓ src/features/realtime/__tests__/collaborationService.test.ts (11 tests)
 ✓ src/features/realtime/__tests__/websocketClient.test.ts (13 tests)
 
 Test Files  7 passed (7)
-Tests       55 passed (55)
+Tests       67 passed (67)
 ```
 
-### B. Backend Integration, RoomManager & Real-Time Operation Tests (`server/`)
+### B. Backend Integration, RoomManager & Synchronization Tests (`server/`)
 
 A comprehensive backend test suite executing via `npm test` in `server/` against local MongoDB:
 
-1. **Canvas Operations Suite (`canvasOperations.test.ts` - New in Day 5)**:
+1. **Canvas Synchronization Suite (`canvasSynchronization.test.ts` - New in Day 6)**:
+   - Strictly monotonic integer `serverSequence` ($1, 2, 3...$) and authoritative `serverTimestamp` assignment by `RoomManager`.
+   - Originating sender receives sequence and timestamp metadata in `CANVAS_OPERATION_ACK`.
+   - Reconnecting or gapped clients request catch-up via `SYNC_REQUEST` and receive ordered canonical history via `SYNC_RESPONSE`.
+   - Clients handle out-of-order broadcast packets by buffering, requesting missing sequences, and draining in order.
+   - If a client's sequence gap exceeds retained history, the server issues `SYNC_REQUIRED`.
+   - Concurrent operations from multiple clients in the same room are assigned deterministic total ordering and converge identically.
+2. **Canvas Operations Suite (`canvasOperations.test.ts` - Hardened in Day 5.1)**:
    - Sockets outside rooms rejected with `NOT_IN_ROOM`.
    - Sockets attempting unauthorized room operations rejected with `ROOM_ACCESS_DENIED`.
    - Envelope validation: missing `operationId`, `objectId`, `clientId`, or invalid timestamps rejected.
-   - Type validation: unlisted operation types rejected with `INVALID_OPERATION_TYPE`.
-   - Payload validation: malformed object definitions or non-numeric move coordinates rejected with `INVALID_OPERATION_PAYLOAD`.
+   - Strict `CREATE_OBJECT` validation: base attributes (`x`, `y`, `opacity`, `rotation`) and shape-specific payloads (`rectangle`, `ellipse`, `line`, `stroke`, `text`).
+   - Strict `UPDATE_OBJECT` validation: allowlisted patch fields, non-empty patch requirement, type checks, forbidden system fields (`id`, `type`, `createdAt`, `updatedAt`, `createdBy`).
    - Room broadcasting: `CREATE_OBJECT` delivered to other room members, sender excluded, sender receives `CANVAS_OPERATION_ACK`.
    - Identity binding: client-supplied forged `userId` stripped and overridden with authenticated socket user ID.
    - Room isolation: operations never leak to sockets in different rooms.
    - Duplicate protection: repeated `operationId` rejected with `DUPLICATE_OPERATION`.
    - Bidirectional collaboration: full multi-user interaction verified between User A and User B.
-2. **Full Pipeline Integration Suite (`canvasPipelineIntegration.test.ts` - New in Day 5)**:
-   - Complete end-to-end multi-client lifecycle:
-     Client A `CREATE_OBJECT` → WebSocket Server → RoomManager → Client B Canvas State →
-     Client B `MOVE_OBJECT` → WebSocket Server → RoomManager → Client A Canvas State →
-     Client A `DELETE_OBJECT` → WebSocket Server → RoomManager → Client B Canvas State.
-   - Both client states converge identically.
-3. **RoomManager Unit Tests (`roomManager.test.ts`)**:
+3. **Full Pipeline Integration Suite (`canvasPipelineIntegration.test.ts`)**:
+   - Complete end-to-end multi-client lifecycle: Client A create → Client B move → Client A delete, verifying convergence across both client stores.
+4. **RoomManager Unit Tests (`roomManager.test.ts` - Extended in Day 6)**:
    - In-memory socket room joining and membership tracking.
-   - Deduplicated joins for sockets already present in the room.
-   - Safe room switching (leaves old room, joins new room).
-   - Empty room garbage collection: automatically deletes room Set when last socket leaves.
-   - Multi-room socket isolation.
-   - Targeted room broadcasts excluding sender.
-   - Bounded duplicate operation ID tracking.
-   - Clean state reset on `clear()`.
-4. **WebSocket Integration & Protocol Suite (`websocket.test.ts`)**:
+   - Monotonic sequence generation per canvas.
+   - Bounded in-memory history log (1,000 operations per canvas).
+   - Empty room garbage collection.
+   - Sender-excluded targeted broadcasts.
+5. **WebSocket Integration & Protocol Suite (`websocket.test.ts`)**:
    - Handshake authentication with valid JWT (`CONNECTED` envelope verification).
-   - Missing token rejection during upgrade (`HTTP 401 Unauthorized`).
-   - Invalid token rejection during upgrade (`HTTP 401 Unauthorized`).
-   - Authorized room join (`JOIN_ROOM` -> `ROOM_JOINED`).
-   - Unauthorized room access denial for non-members (`ROOM_ACCESS_DENIED`).
-   - Non-existent room handling (`ROOM_NOT_FOUND`).
-   - Malformed room ID format handling (`INVALID_ROOM_ID`).
-   - Authorized room leave (`LEAVE_ROOM` -> `ROOM_LEFT`).
-   - Room leave when not joined (`NOT_IN_ROOM`).
-   - Automatic socket cleanup on disconnect.
+   - Room join/leave authorization.
    - PING / PONG heartbeat protocol.
-   - Malformed JSON resilience.
-   - Unknown message type handling.
-5. **Authentication API & Security Suite (`auth.test.ts`)**:
-   - Registration validation (email uniqueness, password strength).
-   - Password hashing and verification.
-   - JWT generation and profile retrieval (`/api/auth/me`).
-6. **Room Management API Suite (`room.test.ts`)**:
-   - Room creation, listing, and membership validation.
+6. **Authentication API & Security Suite (`auth.test.ts`)**:
+   - Registration validation, password hashing, JWT generation, `/api/auth/me`.
+7. **Room Management API Suite (`room.test.ts`)**:
+   - Room creation, listing, membership validation.
+8. **Database Configuration Suite (`database.test.ts`)**:
+   - MongoDB connection health and graceful shutdown.
 
 **Backend Test Results Summary**:
 ```text
 ✓ src/__tests__/auth.test.ts (12 tests)
 ✓ src/__tests__/room.test.ts (10 tests)
 ✓ src/__tests__/websocket.test.ts (13 tests)
-✓ src/__tests__/canvasOperations.test.ts (11 tests)
+✓ src/__tests__/canvasOperations.test.ts (15 tests)
 ✓ src/__tests__/canvasPipelineIntegration.test.ts (1 test)
+✓ src/__tests__/canvasSynchronization.test.ts (6 tests)
 ✓ src/websocket/__tests__/roomManager.test.ts (8 tests)
 ✓ src/config/__tests__/database.test.ts (4 tests)
 
-Test Files  7 passed (7)
-Tests       59 passed (59)
-### C. Static Analysis & Compilation
-- **TypeScript Compilation (`tsc`)**: Strict type checking with zero errors across client and server.
-- **ESLint Validation**: Zero lint errors or warnings across entire codebase.
-- **Production Build (`vite build`)**: Generates optimized production bundles in 1.8s.
+Test Files  8 passed (8)
+Tests       69 passed (69)
+```
 
-### D. Manual Single-Browser Verification
-- **Automated vs Manual Clarification**: Multi-client concurrent collaboration, room isolation, bidirectional sync, and pipeline lifecycle are verified comprehensively through automated integration suites (`canvasOperations.test.ts` and `canvasPipelineIntegration.test.ts`). Manual verification for Day 5 was conducted in a single browser session as a smoke test:
-  - **User Registration & Login**: Registered and authenticated user `aliceday5@example.com` on `http://localhost:3000`.
-  - **Room Creation**: Created room `Day 5 Collab Room` from Dashboard.
-  - **Room Entry & Connection**: Entered room workspace, verified `ConnectionStatusBadge` rendered green "Connected" badge.
-  - **Canvas Interaction**: Selected Rectangle tool, drew rectangle $(200, 200) \rightarrow (400, 350)$, verified status bar updated to `Objects: 1`.
-  - **Multi-Shape Support**: Selected Ellipse tool, drew ellipse $(500, 200) \rightarrow (650, 350)$, verified status bar updated to `Objects: 2`.
-  - **Clean Leave / Navigation**: Clicked "Dashboard" button, returned cleanly to dashboard without socket leakage or console errors.
-- **Two-Browser Manual Verification Status**: Simultaneous two-browser manual collaboration testing is conducted and documented specifically under Day 6 (Synchronization & Conflict Resolution).
+**Grand Total Automated Tests**: **15 test files, 136 tests passing (100% pass rate)**.
+
+### C. Static Analysis & Compilation
+- **TypeScript Compilation (`tsc`)**: Strict type checking with zero errors across client and server (`client/` and `server/`).
+- **ESLint Validation**: Zero lint errors or warnings across the entire repository.
+- **Production Build (`vite build`)**: Generates optimized production bundles in $<1$s.
+
+### D. Manual Two-Browser Verification Procedure
+To verify multi-user real-time collaboration under realistic conditions:
+
+1. **Setup**:
+   - Start backend: `npm run dev` in `server/` (runs on `http://localhost:5000`).
+   - Start frontend: `npm run dev` in `client/` (runs on `http://localhost:3000` or `5173`).
+2. **Browser A (User 1 - Alice)**:
+   - Open standard browser window.
+   - Register user `alice@example.com` / `Password123!`.
+   - Create room `Collab Room Day 6`.
+   - Enter canvas workspace. Note green "Connected" badge.
+3. **Browser B (User 2 - Bob)**:
+   - Open incognito browser window (separate session / cookie storage).
+   - Register user `bob@example.com` / `Password123!`.
+   - Join room `Collab Room Day 6` using Room ID copied from Alice's URL or dashboard.
+   - Enter canvas workspace. Note green "Connected" badge.
+4. **Simultaneous Creation & Move**:
+   - Alice creates a blue rectangle at $(100, 100)$.
+   - Bob observes rectangle appear instantly on his canvas without page reload.
+   - Bob selects and drags the rectangle to $(300, 200)$.
+   - Alice observes the shape glide smoothly to the new position.
+5. **Concurrent Edit (Conflict Resolution)**:
+   - Alice changes the fill color to red.
+   - Concurrently, Bob changes the stroke width to 8px.
+   - Both edits merge: both Alice and Bob see a red rectangle with an 8px border (Field-Level LWW).
+6. **Transient Disconnection & Catch-Up**:
+   - In Browser B, simulate network drop (open DevTools Network tab -> Offline).
+   - In Browser A, Alice adds an ellipse and a text object.
+   - In Browser B, restore network (DevTools Network tab -> Online).
+   - Bob's client automatically re-authenticates, rejoins the room, issues `SYNC_REQUEST`, receives `SYNC_RESPONSE`, and renders both missed shapes seamlessly.
+7. **Room Isolation**:
+   - Open Browser C with User Charlie in a different room (`Other Room`).
+   - Charlie draws a shape. Verify neither Alice nor Bob in `Collab Room Day 6` receives the shape.
 
 ---
 
-## 2. Planned Test Suites (Architectural Design)
+## 2. Planned Test Suites (Architectural Roadmap)
 
-> [!NOTE]
-> The test suites listed below represent planned test coverage to be introduced across Days 3–9 alongside feature implementations. None of these automated test suites are implemented yet.
-
-### A. State Reducer & Operation Unit Tests (Planned - Day 3/5)
-- Pure unit tests verifying that applying a `CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, or `MOVE_OBJECT` produces deterministic `CanvasState` transitions.
-
-### B. REST API Route Integration Tests (Planned - Day 3)
-- Test Express routes using Supertest for request parameter parsing, room creation, error status codes, and JSON compliance.
-
-### C. WebSocket & Room Synchronization Tests (Planned - Day 4/5)
-- Room lifecycle, client join/leave broadcasts, and message framing tests.
-
-### D. Concurrent Editing & Conflict Tests (Planned - Day 6)
-- Simultaneous client operations on shared objects verifying deterministic state convergence.
-
-### E. End-to-End (E2E) Collaboration Tests (Planned - Day 9)
-- Playwright multi-browser automation launching two concurrent browser windows, simulating user strokes in Client A, and verifying visual canvas reproduction in Client B within 100ms.
+- **Day 7**: Live presence testing (cursor position broadcasts, selection bounding boxes, user color badges).
+- **Day 8**: Temporal snapshots and durable operation history persistence in MongoDB.
+- **Day 9**: Playwright multi-browser end-to-end automated collaboration tests.

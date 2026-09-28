@@ -1,7 +1,7 @@
 # WebSocket Protocol & Infrastructure Specification
 
 > [!NOTE]
-> **Status: Implemented (Day 5)**. This document specifies the real-time WebSocket communication layer, message envelopes, authentication, room lifecycle, reconnection semantics, error handling, and collaborative canvas operation broadcasting established on Days 4–5. CRDT/OT conflict resolution is planned for Day 6.
+> **Status: Implemented (Day 6)**. This document specifies the real-time WebSocket communication layer, message envelopes, authentication, room lifecycle, reconnection semantics, error handling, collaborative canvas operation broadcasting, and synchronization protocol (`SYNC_REQUEST`, `SYNC_RESPONSE`, `SYNC_REQUIRED`) established on Days 4–6. Long-term snapshot and operation history persistence is planned for Day 8.
 
 ---
 
@@ -257,7 +257,7 @@ Emitted by clients to submit a local canvas mutation for server validation and r
 ```
 
 #### 8. `CANVAS_OPERATION` (Server → Remote Clients Broadcast)
-Broadcast to all other connected room members (excluding the originating sender). Note that `userId` is bound strictly by the server from authenticated context.
+Broadcast to all other connected room members (excluding the originating sender). Contains authoritative `serverSequence`, `serverTimestamp`, and server-bound `userId`.
 ```json
 {
   "type": "CANVAS_OPERATION",
@@ -269,24 +269,82 @@ Broadcast to all other connected room members (excluding the originating sender)
     "timestamp": 1727400000123,
     "clientId": "client_tab_uuid",
     "userId": "6ab8344cc22dd7c320651218",
+    "serverSequence": 42,
+    "serverTimestamp": 1727400000130,
     "payload": { ... }
   }
 }
 ```
 
 #### 9. `CANVAS_OPERATION_ACK` (Server → Sender Client)
-Acknowledges to the originating sender that the operation was validated, recorded, and broadcast.
+Acknowledges to the originating sender that the operation was validated, recorded, assigned a canonical sequence number, and broadcast.
 ```json
 {
   "type": "CANVAS_OPERATION_ACK",
   "requestId": "req_op_1",
   "payload": {
-    "operationId": "op_create_1727400000"
+    "operationId": "op_create_1727400000",
+    "serverSequence": 42,
+    "serverTimestamp": 1727400000130
   }
 }
 ```
 
-#### 10. `CANVAS_OPERATION_ERROR` (Server → Sender Client)
+#### 10. `SYNC_REQUEST` (Client → Server)
+Emitted by clients upon reconnecting or detecting a sequence gap ($S > S_{last} + 1$) to request missing canonical operations.
+```json
+{
+  "type": "SYNC_REQUEST",
+  "requestId": "req_sync_1",
+  "payload": {
+    "canvasId": "6ab83470c22dd7c320651219",
+    "sinceSequence": 41
+  }
+}
+```
+
+#### 11. `SYNC_RESPONSE` (Server → Client)
+Returns all ordered canonical operations recorded in the server's history since `sinceSequence`.
+```json
+{
+  "type": "SYNC_RESPONSE",
+  "requestId": "req_sync_1",
+  "payload": {
+    "canvasId": "6ab83470c22dd7c320651219",
+    "fromSequence": 42,
+    "toSequence": 48,
+    "operations": [
+      {
+        "operationId": "op_create_1727400000",
+        "canvasId": "6ab83470c22dd7c320651219",
+        "type": "CREATE_OBJECT",
+        "objectId": "rect_987",
+        "timestamp": 1727400000123,
+        "clientId": "client_tab_uuid",
+        "userId": "6ab8344cc22dd7c320651218",
+        "serverSequence": 42,
+        "serverTimestamp": 1727400000130,
+        "payload": { ... }
+      }
+    ]
+  }
+}
+```
+
+#### 12. `SYNC_REQUIRED` (Server → Client)
+Emitted when a client requests synchronization for a sequence that has already been purged from the server's in-memory bounded history ($>1,000$ operations ago), signaling that the client state has diverged.
+```json
+{
+  "type": "SYNC_REQUIRED",
+  "payload": {
+    "canvasId": "6ab83470c22dd7c320651219",
+    "serverSequence": 1500,
+    "reason": "Requested sequence 41 is older than retained history window"
+  }
+}
+```
+
+#### 13. `CANVAS_OPERATION_ERROR` (Server → Sender Client)
 Returned when an operation fails runtime envelope or payload validation, duplicate checks, or authorization.
 ```json
 {
@@ -300,7 +358,7 @@ Returned when an operation fails runtime envelope or payload validation, duplica
 }
 ```
 
-#### 11. `ERROR` (Server → Client)
+#### 14. `ERROR` (Server → Client)
 Structured error responses for general protocol or envelope violations.
 ```json
 {

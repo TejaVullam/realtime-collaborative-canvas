@@ -208,8 +208,61 @@ This document records the architectural and design decisions made throughout the
     - Zero perceptible lag for local drawing.
     - Robust server authorization and room isolation preventing cross-room data leaks.
     - Clean foundation for Day 6 synchronization conflict resolution.
-  - **Explicit Limitations (To Be Addressed in Day 6+)**:
-    - **No CRDT / OT yet**: Concurrent conflicting edits (e.g. Alice and Bob dragging the same object simultaneously) are not resolved through operational transformation or CRDTs.
-    - **No Persistent Operation History Log**: Operations are broadcast ephemeral in-memory; operation logs are not yet written to MongoDB.
-    - **No Horizontal Scaling**: Room broadcasting is bounded to the single Node.js process memory.
+  - **Explicit Limitations (Addressed in Day 6)**:
+    - **Concurrent Conflicting Edits**: Resolved via Server-Authoritative Monotonic Sequences and Field-Level Last-Write-Wins (ADR-009).
+    - **In-Memory Synchronization History**: Bounded catch-up log (1,000 operations per canvas) added in Day 6; full long-term disk persistence deferred to Day 8.
+
+---
+
+## ADR-009: Canvas Synchronization Strategy
+
+- **Status**: Accepted (Day 6)
+- **Context**:
+  With real-time operation broadcasting functional (Day 5), multiple users can concurrently mutate canvas objects. Distributed real-time collaboration presents fundamental synchronization challenges:
+  1. **Concurrent conflicting updates**: Two users modifying properties of the same object (e.g. Alice sets `fill: '#ef4444'` while Bob sets `strokeWidth: 6` or `fill: '#3b82f6'`) or moving the same shape simultaneously.
+  2. **Concurrent mutation vs deletion**: One user deleting an object while another user updates or moves it.
+  3. **Packet reordering & network latency**: Operations arriving out of causal order across diverse network pathways.
+  4. **Transient disconnections & packet loss**: Reconnecting clients needing to catch up on missed mutations without full page reloads or downloading redundant data.
+  
+  We must select an architectural synchronization model: Conflict-Free Replicated Data Types (CRDT), Operational Transformation (OT), or a Server-Authoritative Sequenced Operation Log with Field-Level Last-Write-Wins (LWW).
+
+- **Evaluation of Alternatives**:
+  1. **Conflict-Free Replicated Data Types (CRDT)**:
+     - *Mechanics*: Each object attribute carries Lamport/vector timestamps and unique replica IDs; states or delta-mutations commute mathematically.
+     - *Evaluation*: CRDTs (e.g. Yjs, Automerge) excel in peer-to-peer decentralized text editors. However, for a 2D structured graphics canvas with centralized rooms and authenticated servers, CRDTs introduce immense memory bloat (tombstones for deleted objects that never get collected without distributed GC, complex causality trees), high serialization overhead, and conceptual over-engineering for spatial discrete objects.
+  2. **Operational Transformation (OT)**:
+     - *Mechanics*: Operations are transformed against concurrent concurrent operations using pairwise transform matrices ($T(op_1, op_2) \rightarrow (op_1', op_2')$).
+     - *Evaluation*: OT is notoriously complex to prove mathematically correct, especially with non-text graphic operations ($N \times N$ matrix for `CREATE`, `UPDATE`, `DELETE`, `MOVE`, `REORDER`). Combinatorial explosion of edge cases makes OT fragile and unnecessarily difficult to maintain.
+  3. **Server-Authoritative Sequenced Operation Log with Field-Level LWW (Chosen)**:
+     - *Mechanics*:
+       - The server functions as the authoritative clock and ordering sequencer for each canvas room.
+       - The server assigns a strictly monotonic integer `serverSequence` ($1, 2, 3...$) and authoritative wall-clock `serverTimestamp` to every validated operation.
+       - Clients apply operations in strict sequence order, buffering any out-of-order operations ($S > S_{last} + 1$) and draining them as sequence gaps are filled.
+       - A bounded in-memory operation history ($1,000$ operations per canvas) enables reconnecting or gapped clients to issue a lightweight `SYNC_REQUEST` and receive missed canonical operations (`SYNC_RESPONSE`).
+       - If a client's sequence gap exceeds available history, the server issues `SYNC_REQUIRED`, transitioning the client to a `diverged` state requiring clean refresh.
+     - *Conflict Resolution Semantics*:
+       - **Field-Level Last-Write-Wins (LWW)**: `UPDATE_OBJECT` patches modify only specific attributes. Independent fields merge cleanly (e.g. Alice changing `fill` and Bob changing `strokeWidth` both apply). For concurrent updates to the same field, the operation with the higher `serverTimestamp` (or higher `serverSequence` as deterministic tie-breaker) wins.
+       - **Deletion Dominance**: `DELETE_OBJECT` removes the entity. Any subsequent or concurrent `UPDATE_OBJECT` or `MOVE_OBJECT` targeting a deleted object is a deterministic no-op.
+       - **Spatial Convergence**: Concurrent moves converge to the position assigned by the higher server sequence, ensuring all clients render the identical coordinate.
+       - **Zero Tombstones**: Deleted objects are cleanly purged from the active object dictionary without permanent memory accumulation.
+
+- **Decision**:
+  Adopt the **Server-Authoritative Sequenced Operation Log with Field-Level Last-Write-Wins (LWW)**.
+  - Reject full CRDT and OT frameworks as inappropriate and overly complex for this architectural phase.
+  - Implement per-canvas atomic monotonic sequencing (`serverSequence: number`) in `RoomManager`.
+  - Maintain a bounded FIFO in-memory synchronization log (`MAX_HISTORY_PER_CANVAS = 1000`) per canvas.
+  - Implement out-of-order buffering, sequence drain, and `SYNC_REQUEST`/`SYNC_RESPONSE` in `CollaborationService`.
+  - Expose synchronization health state (`synced`, `syncing`, `diverged`) in `CollaborationService` and `ConnectionStatusBadge`.
+
+- **Consequences**:
+  - **Benefits**:
+    - Guaranteed deterministic state convergence across all connected clients.
+    - Zero tombstone accumulation; clean memory management.
+    - Minimal network overhead: small payload headers (`serverSequence`, `serverTimestamp`).
+    - Highly resilient to packet reordering and transient connection drops.
+    - Fast, predictable unit and integration testing without nondeterministic distributed state bugs.
+  - **Trade-Offs & Boundaries**:
+    - Requires server coordination; not suitable for pure serverless peer-to-peer topologies (aligned with our centralized room design).
+    - Long-term offline edits across days require snapshot rehydration, which will be implemented in Day 8 with MongoDB persistence.
+
 

@@ -6,26 +6,28 @@ This document details the system architecture for the Real-Time Collaborative Ca
 
 The Real-Time Collaborative Canvas is designed as a decoupled, multi-user visual workspace enabling simultaneous manipulation of graphic entities with low latency, robust state synchronization, and reliable persistence.
 
-## Current Implementation (Day 4)
+## Current Implementation (Day 6)
 
-As of Day 4, the system establishes:
-- **WebSocket Infrastructure**: Low-latency, bidirectional WebSocket server built with `ws` mounting directly on the shared Node.js HTTP server at `/ws`.
+As of Day 6, the system establishes:
+- **Server-Authoritative Synchronization & Ordering (Day 6)**: Monotonically increasing `serverSequence` counter and authoritative `serverTimestamp` per canvas room assigned by `RoomManager`.
+- **Field-Level Last-Write-Wins Conflict Resolution (Day 6)**: Deterministic convergence for concurrent operations with attribute-level merging, deletion dominance, and timestamp-based tie breaking.
+- **Client Out-of-Order Buffering & Catch-Up (Day 6)**: `CollaborationService` buffers out-of-order sequence packets, requests missing gaps via `SYNC_REQUEST`, drains buffer contiguously, and catches up upon network reconnect.
+- **In-Memory Bounded History (Day 6)**: Server maintains a bounded FIFO buffer of 1,000 operations per canvas for fast client catch-up without hitting disk.
+- **WebSocket Infrastructure (Day 4 / 4.1)**: Low-latency, bidirectional WebSocket server built with `ws` mounting directly on the shared Node.js HTTP server at `/ws`.
 - **Authenticated Sockets**: Handshake JWT authentication verifying credentials with `AuthService.verifyToken()` and binding immutable user identities into `AuthenticatedSocketContext`.
 - **In-Memory Room Management**: Dedicated `RoomManager` tracking active socket sets per room, cleanly separated from persistent MongoDB `Room` membership records, with automatic cleanup of empty rooms.
 - **Real-Time Canvas Collaboration (Day 5)**: Multi-user operation synchronization pipeline:
   $$\text{Canvas UI} \rightarrow \text{Local Canvas Interaction} \rightarrow \text{CanvasOperation} \rightarrow \text{CollaborationService} \rightarrow \text{WebSocketClient} \rightarrow \text{WebSocketServer} \rightarrow \text{RoomManager} \rightarrow \text{Remote Clients} \rightarrow \text{applyCanvasOperation} \rightarrow \text{Canvas State Reducer} \rightarrow \text{Canvas Render}$$
-- **Server Operation Validation & Authorization (Day 5)**: Strict runtime validation of operation envelopes and shape-specific payloads, persistent MongoDB room membership checks, sender exclusion, and client ACKs.
-- **Client Duplicate Protection (Day 5)**: Bounded FIFO sets (1,000 operation capacity) suppressing duplicate network messages and local broadcast reflections.
-- **Server Room Authorization (Day 4)**: Strict server-side verification ensuring clients can only join WebSocket rooms if they are registered members of the room in MongoDB.
-- **Client Real-Time Connectivity (Day 4 / 4.1)**: Client-side `WebSocketClient` service featuring bounded exponential backoff reconnection with jitter (1s to 16s), automatic room rejoining upon reconnect, and clean explicit disconnect semantics.
-- **Connection Status UI (Day 4)**: `ConnectionStatusBadge` displaying real-time connection state (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`) in the room canvas header.
-- **Heartbeat & Liveness (Day 4)**: 30-second ping/pong connection health monitor and dead socket pruning.
+- **Server Operation Validation & Authorization (Day 5 / 5.1)**: Strict runtime validation of operation envelopes and shape-specific payloads, persistent MongoDB room membership checks, sender exclusion, and client ACKs with sequence assignment.
+- **Client Duplicate Protection**: Bounded FIFO sets (1,000 operation capacity) suppressing duplicate network messages and local broadcast reflections.
+- **Client Real-Time Connectivity**: Client-side `WebSocketClient` service featuring bounded exponential backoff reconnection with jitter (1s to 16s), automatic room rejoining upon reconnect, and clean explicit disconnect semantics.
+- **Connection Status UI**: `ConnectionStatusBadge` displaying real-time connection state (`Connected`, `Connecting...`, `Reconnecting...`, `Error`, `Disconnected`) and synchronization state (`synced`, `syncing`, `diverged`).
 - **User Authentication (Day 3)**: Secure user registration, credential verification, bcrypt password hashing, and JWT token issuance.
 - **Room Management (Day 3)**: MongoDB `Room` and `Canvas` models with relational integrity (`User -> Room -> Canvas`).
 - **Canvas Interaction Engine (Day 2 / 2.1)**: High-performance HTML5 2D canvas pipeline with pointer capture, geometric hit testing, transform matrix rendering, and viewport zoom/pan.
 
 > [!IMPORTANT]
-> Day 5 establishes **operation-based real-time canvas collaboration**. Advanced conflict resolution (CRDT / OT), live presence cursors, and persistent operation logging are **FUTURE — DAYS 6–7**.
+> Day 6 completes **synchronization correctness, ordering, and conflict resolution**. Live presence cursors and avatars are scheduled for **Day 7**, and persistent MongoDB snapshots and operation logs are scheduled for **Day 8**.
 
 ## Target Architecture
 
@@ -45,6 +47,7 @@ As of Day 4, the system establishes:
              Room API                    Socket Auth
                  │                             │
                  │                       RoomManager
+                 │               (Sequencer & Bounded History)
                  │                             │
                  └──────────────┬──────────────┘
                                 ▼
@@ -57,14 +60,14 @@ As of Day 4, the system establishes:
                        LOCAL CANVAS STATE
 
 
-        DAY 5 — REAL-TIME COLLABORATION PIPELINE (Active)
-        ──────────────────────────────────────────────────
-        Canvas Action ──► CanvasOperation ──► CollaborationService ──► WebSocket ──► Server Validation ──► Room Broadcast ──► Remote Canvas Reducer
+        DAY 6 — DETERMINISTIC SYNCHRONIZATION PIPELINE (Active)
+        ────────────────────────────────────────────────────────
+        Local Action ──► CanvasOperation ──► CollaborationService ──► WebSocket ──► Server Sequencer ──► Bounded History ──► Room Broadcast ──► Remote Sequence Buffer ──► Canonical applyCanvasOperation
 
 
-        FUTURE — DAY 6
-        ─────────────────
-        Concurrent Operations ──► Conflict Resolution / OT / CRDT
+        FUTURE — DAY 7
+        ───────────────
+        Awareness & Presence ──► Live Cursors / Remote Selections
 ```
 
 ```mermaid

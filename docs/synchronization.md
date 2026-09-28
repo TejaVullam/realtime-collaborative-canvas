@@ -1,155 +1,187 @@
-# Synchronization Strategy
+# Canvas Synchronization & Conflict Resolution Strategy
 
-> **Status: Operation-Based Real-Time Collaboration Implemented (Day 5)**.  
-> Day 5 implements operation-based message broadcasting between authenticated clients within isolated room boundaries. Advanced conflict resolution (CRDT / OT / LWW convergence) is intentionally scheduled for **Day 6**.
+> **Status: Implemented (Day 6)**.  
+> Day 6 establishes a **Server-Authoritative Sequenced Operation Log with Field-Level Last-Write-Wins (LWW)** conflict resolution, monotonic sequence ordering, out-of-order buffering, and reconnect catch-up protocol.
 
 ---
 
-## 1. Day 5 Architecture: Operation-Based Real-Time Collaboration
+## 1. Architectural Model & Synchronization Overview
 
-Day 5 introduces the first multi-user synchronization layer using atomic operations (`CanvasOperation`).
+The Real-Time Collaborative Canvas employs a **Server-Authoritative Sequenced Operation Log**. 
+
+Rather than adopting complex distributed CRDTs (which introduce tombstone leaks and metadata bloat) or Operational Transformation (which suffers from combinatorial transformation matrices across multi-attribute geometric entities), the system designates the WebSocket server as the single source of truth for global causal ordering.
 
 ```text
-                               LOCAL CLIENT (Alice)
-                       ┌──────────────────────────────────┐
-                       │ User Interaction (Draw/Move/Del) │
-                       └─────────────────┬────────────────┘
-                                         ▼
-                       ┌──────────────────────────────────┐
-                       │     Create CanvasOperation       │
-                       └─────────┬──────────────────────┬─┘
-                                 │                      │
-             Immediate Local Apply                      │ Transmit
-                                 ▼                      ▼
-  ┌─────────────────────────────────────────┐  ┌──────────────────────────────────┐
-  │ dispatch({ type: 'APPLY_OPERATION',     │  │ CollaborationService             │
-  │            source: 'local', op })       │  │ .sendCanvasOperation(op)         │
-  └─────────────────────────────────────────┘  └────────────────┬─────────────────┘
-                                                                │
-                                                                ▼
-                                                       WebSocket Client
-                                                                │
-                                                                ▼  (CANVAS_OPERATION)
-                                                       WebSocket Server
-                                                                │
-                                                    1. Authenticate & Authorize
-                                                    2. Validate Operation & Shape
-                                                    3. Check Bounded Duplicates
-                                                    4. Bind Server User Identity
-                                                                │
-                                    ┌───────────────────────────┴───────────────────────────┐
-                                    ▼                                                       ▼
-                      Sender ACK (Alice)                                    Room Broadcast (Bob)
-             ┌──────────────────────────────────┐                  ┌──────────────────────────────────┐
-             │ CANVAS_OPERATION_ACK             │                  │ CANVAS_OPERATION                 │
-             │ { operationId }                  │                  │ { op, userId: 'alice' }          │
-             └──────────────────────────────────┘                  └────────────────┬─────────────────┘
-                                                                                    │
-                                                                                    ▼
-                                                                           REMOTE CLIENT (Bob)
-                                                                   ┌──────────────────────────────────┐
-                                                                   │ CollaborationService Listener    │
-                                                                   │ - Duplicate Check & Filter       │
-                                                                   └────────────────┬─────────────────┘
-                                                                                    │
-                                                                                    ▼
-                                                                   ┌──────────────────────────────────┐
-                                                                   │ dispatch({                       │
-                                                                   │   type: 'APPLY_OPERATION',       │
-                                                                   │   source: 'remote', op           │
-                                                                   │ })                               │
-                                                                   └────────────────┬─────────────────┘
-                                                                                    │
-                                                                                    ▼
-                                                                   ┌──────────────────────────────────┐
-                                                                   │ applyCanvasOperation(state, op)  │
-                                                                   └────────────────┬─────────────────┘
-                                                                                    │
-                                                                                    ▼
-                                                                   ┌──────────────────────────────────┐
-                                                                   │ Canvas State Reducer & Render    │
-                                                                   └──────────────────────────────────┘
+       Client A (Alice)                    WebSocket Server                   Client B (Bob)
+   ┌───────────────────────┐           ┌──────────────────────┐          ┌───────────────────────┐
+   │ Draw / Drag Object    │           │ Monotonic Sequencer  │          │ Idle / Drawing Other  │
+   └──────────┬────────────┘           └──────────┬───────────┘          └──────────┬────────────┘
+              │                                   │                                 │
+   1. Apply locally (0ms)                         │                                 │
+   2. Send CANVAS_OPERATION                       │                                 │
+              ├──────────────────────────────────►│                                 │
+              │                                   │                                 │
+              │                       3. Validate structure & auth                  │
+              │                       4. Check canvasId:opId dedup                  │
+              │                       5. Assign serverSequence (e.g. 42)            │
+              │                       6. Assign serverTimestamp                     │
+              │                       7. Append to Bounded History                  │
+              │                                   │                                 │
+              │◄──────────────────────────────────┤ 8a. CANVAS_OPERATION_ACK        │
+              │   (Acknowledges seq: 42)          │     { seq: 42, ts: ... }        │
+              │                                   ├────────────────────────────────►│ 8b. Broadcast Canonical Op
+              │                                   │                                 │     { seq: 42, ts: ... }
+              │                                   │                                 │
+              │                                   │                      9. Check seq == lastApplied + 1
+              │                                   │                         - In order: apply directly
+              │                                   │                         - Gap: buffer & request sync
+              │                                   │                         - Outdated: discard
 ```
 
 ---
 
-## 2. Operation Lifecycle
+## 2. Protocol Specifications & Invariants
 
-### 2.1 The Atomic Unit: `CanvasOperation`
-State modifications are modeled strictly as discrete atomic operations rather than full canvas snapshots:
+### 2.1 The Canonical Operation (`CanonicalCanvasOperation`)
+
+Every operation that passes server validation is canonicalized with server-assigned metadata:
 
 ```typescript
 export interface BaseOperation {
-  operationId: string;       // Unique UUID generated by client
-  canvasId: string;          // Room ID / Canvas context
-  type: CanvasOperationType; // 'CREATE_OBJECT' | 'UPDATE_OBJECT' | 'DELETE_OBJECT' | 'MOVE_OBJECT' | 'REORDER_OBJECT'
-  objectId: string;          // Target entity identifier
-  timestamp: number;         // Generation epoch (ms)
-  clientId: string;          // Originating browser tab session ID
-  sequenceNumber?: number;   // Optional sequence metadata
-  userId?: string;           // Injected strictly by server from authenticated context
+  operationId: string;         // Unique UUID generated by client
+  canvasId: string;            // Canvas context ID
+  type: CanvasOperationType;   // 'CREATE_OBJECT' | 'UPDATE_OBJECT' | 'DELETE_OBJECT' | 'MOVE_OBJECT' | 'REORDER_OBJECT'
+  objectId: string;            // Target entity identifier
+  timestamp: number;           // Originating client timestamp
+  clientId: string;            // Session-stable client identifier
+  userId?: string;             // Authenticated user ID (bound by server)
+  serverSequence?: number;     // Monotonically increasing sequence assigned by server (1, 2, 3...)
+  serverTimestamp?: number;    // Authoritative server timestamp (ms epoch)
 }
 ```
 
-### 2.2 Local Operation Flow (0ms Latency)
-1. Local user draws, transforms, moves, or deletes a shape.
-2. An atomic `CanvasOperation` is synthesized with a unique `operationId`.
-3. The operation is dispatched immediately to `canvasStateReducer` with `source: 'local'`, executing `applyCanvasOperation(state, op)` with zero perceived latency (60fps rendering).
-4. `CollaborationService.sendCanvasOperation(op)` records the `operationId` in the local duplicate cache and transmits the operation over the WebSocket.
-
-### 2.3 Remote Operation Flow
-1. Incoming `CANVAS_OPERATION` arrives over WebSocket.
-2. `CollaborationService` checks its bounded duplicate set. If `operationId` was already processed (or originated locally), it is discarded.
-3. The verified operation is dispatched to `canvasStateReducer` with `source: 'remote'`.
-4. `applyCanvasOperation(state, op)` updates state deterministically without invoking synthetic DOM or pointer events.
-5. The canvas re-renders with the updated state.
-
-### 2.4 Sender Exclusion & Acknowledgment
-To prevent local operations from being applied twice (once on user interaction and once upon receiving the server's broadcast reflection), the server **excludes the originating socket** from the room broadcast:
-- **Originating client**: Receives `CANVAS_OPERATION_ACK` containing `operationId`.
-- **Other room members**: Receive `CANVAS_OPERATION` containing the verified operation and server-bound `userId`.
+### 2.2 Sequence Invariants
+1. **Strict Monotonicity**: For any given canvas, `serverSequence` increments strictly by 1 for each valid operation ($S_{n+1} = S_n + 1$).
+2. **Global Total Order**: All clients converge toward the exact same state by executing canonical operations in ascending order of `serverSequence`.
+3. **Idempotency**: An operation with `serverSequence <= lastAppliedSequence` or with an already-processed `canvasId:operationId` key is safely discarded.
 
 ---
 
-## 3. Strict Server Validation & Authorization
+## 3. Client-Side Sequence Ordering & Out-of-Order Buffering
 
-The server guards the real-time channel against malformed data, unauthorized access, and identity spoofing:
-1. **Authenticated Context**: The sending socket must be authenticated via JWT during handshake.
-2. **Room Boundary**: Sockets must be inside an active room (`NOT_IN_ROOM` error if not).
-3. **Persistent Membership**: The server queries MongoDB `Room.findById(currentRoomId)` and confirms `userId` is an authorized member (`ROOM_ACCESS_DENIED` error if not).
-4. **Operation Validation**: `validateCanvasOperation` validates envelope structure, timestamps, allowed types, and shape-specific payloads (`rectangle`, `ellipse`, `line`, `stroke`, `text`).
-5. **No Identity Spoofing**: Any client-provided `userId` in the message payload is disregarded and overwritten with `context.userId`.
+Due to variable network latency, operations might arrive out of sequence. `CollaborationService` enforces ordered execution via a sequence buffer:
+
+```text
+Incoming Remote Operation (Sequence = S, Current LastApplied = L)
+                │
+                ├─ If S <= L ──────────────► Discard (Already processed / old duplicate)
+                │
+                ├─ If S == L + 1 ──────────► Contiguous in-order:
+                │                            1. Mark processed (canvasId:operationId)
+                │                            2. Dispatch to canvas reducer
+                │                            3. L = S
+                │                            4. Drain buffer (check L + 1, L + 2...)
+                │
+                └─ If S > L + 1 ───────────► Gap Detected:
+                                             1. Store in sequenceBuffer[S]
+                                             2. Set syncStatus = 'syncing'
+                                             3. Transmit SYNC_REQUEST { canvasId, sinceSequence: L }
+```
+
+### Buffer Drainage Algorithm
+Whenever the missing sequence $L + 1$ arrives (via broadcast or `SYNC_RESPONSE`), `drainSequenceBuffer` executes a continuous while-loop:
+```typescript
+while (this.sequenceBuffer.has(this.lastAppliedSequence + 1)) {
+  const nextSeq = this.lastAppliedSequence + 1;
+  const nextOp = this.sequenceBuffer.get(nextSeq)!;
+  this.sequenceBuffer.delete(nextSeq);
+  
+  if (!this.hasProcessed(nextOp.canvasId, nextOp.operationId)) {
+    this.markProcessed(nextOp.canvasId, nextOp.operationId);
+    handler(nextOp);
+  }
+  this.lastAppliedSequence = nextSeq;
+}
+if (this.sequenceBuffer.size === 0 && this.syncStatus === 'syncing') {
+  this.setSyncStatus('synced');
+}
+```
 
 ---
 
-## 4. Duplicate Operation Protection
+## 4. Reconnection & Catch-Up Protocol
 
-Network latency, retries, and broadcast reflection can lead to duplicate messages. Both client and server maintain bounded duplicate tracking:
-- **Structure**: A `Set<string>` paired with a FIFO eviction queue capped at `MAX_PROCESSED_OPS = 1000`.
-- **Eviction**: When the cache reaches 1,000 operation IDs, the oldest entry is evicted upon new additions.
-- **Idempotency**: Any message bearing an `operationId` present in the cache is safely suppressed.
+When a client loses connection and reconnects:
+
+1. **Auto Rejoin**: The client re-authenticates and rejoins its room via `JOIN_ROOM`.
+2. **Sync Request**: The client emits `SYNC_REQUEST`:
+   ```json
+   {
+     "type": "SYNC_REQUEST",
+     "payload": {
+       "canvasId": "canvas-123",
+       "sinceSequence": 45
+     }
+   }
+   ```
+3. **Server Response**:
+   - If the server has history for sequences $> 45$, it replies with `SYNC_RESPONSE`:
+     ```json
+     {
+       "type": "SYNC_RESPONSE",
+       "payload": {
+         "canvasId": "canvas-123",
+         "fromSequence": 46,
+         "toSequence": 52,
+         "operations": [ ...ordered canonical operations... ]
+       }
+     }
+     ```
+   - If the client's `sinceSequence` has been purged from the bounded in-memory buffer (gap too large), the server issues `SYNC_REQUIRED`:
+     ```json
+     {
+       "type": "SYNC_REQUIRED",
+       "payload": {
+         "canvasId": "canvas-123",
+         "serverSequence": 1500,
+         "reason": "History purged; full reload required"
+       }
+     }
+     ```
+     The client marks its state as `diverged` and prompts the user or fetches a fresh snapshot.
 
 ---
 
-## 5. Disconnection & Failure Behavior (Approach A)
+## 5. Conflict Resolution Rules
 
-- **Local Functionality**: When disconnected or reconnecting, the local canvas engine remains fully functional for drawing and navigation.
-- **Controlled Transmission**: If the client is disconnected or not in an active room, `sendCanvasOperation` returns `false` and does not transmit.
-- **Transparency**: Connection status is continuously surfaced through the `ConnectionStatusBadge` (`Connecting...`, `Reconnecting...`, `Disconnected`).
-- **Resumption**: When the connection is re-established and the room is rejoined (`ROOM_JOINED`), real-time operation transmission automatically resumes.
+### 5.1 Deletion Dominance
+- When an object is deleted (`DELETE_OBJECT`), it is immediately removed from the canvas state object dictionary and z-order list.
+- Any subsequent or concurrent `UPDATE_OBJECT` or `MOVE_OBJECT` targeting that deleted `objectId` evaluates cleanly to a no-op without errors or phantom re-creation.
+
+### 5.2 Field-Level Last-Write-Wins (LWW)
+- `UPDATE_OBJECT` patches only mutate the specific attributes supplied in `payload.patch`.
+- **Disjoint Attribute Edits Merge**: If Alice modifies `fill: '#ef4444'` while Bob concurrently modifies `strokeWidth: 5`, both edits apply cleanly.
+- **Concurrent Attribute Collision**: If Alice and Bob mutate the same attribute (e.g. both modify `x` or both modify `fill`), the operation with the higher `serverTimestamp` (or higher `serverSequence` as deterministic tie-breaker) wins.
+
+### 5.3 Deterministic Spatial Movement
+- For concurrent drag/move interactions, the canonical sequence order dictates the final resting coordinate $(x, y)$. All clients apply the sequence in identical order, guaranteeing identical visual placement.
 
 ---
 
-## 6. Critical Boundaries: What Day 5 Does NOT Include
+## 6. Bounded Memory Guarantees
 
-> [!IMPORTANT]
-> **Day 5 provides real-time operation broadcasting, NOT conflict resolution.**
+| Component | Storage Structure | Capacity Limit | Eviction Policy |
+|-----------|-------------------|----------------|-----------------|
+| Server `RoomManager` History | `Map<string, CanonicalCanvasOperation[]>` | 1,000 ops / canvas | FIFO (oldest popped when $> 1000$) |
+| Server `RoomManager` Dedup | `Set<string>` + array | 1,000 keys / canvas | FIFO (`canvasId:operationId`) |
+| Client `CollaborationService` Dedup | `Set<string>` + array | 1,000 keys | FIFO (`canvasId:operationId`) |
+| Client `CollaborationService` Buffer | `Map<number, CanonicalCanvasOperation>` | Bounded by gap | Drained immediately on gap fulfillment |
 
-Explicit limitations:
-1. **No CRDT / OT**: If Alice moves Rectangle X to $(100, 100)$ at the exact same moment Bob moves Rectangle X to $(500, 500)$, both operations are broadcast. The order of arrival at each client dictates the final position without mathematical convergence guarantees or transform matrix reconciliation.
-2. **No Persistent Operation Log**: Operations are broadcast ephemeral in-memory; operation logs are not yet committed to MongoDB.
-3. **No Horizontal Scaling**: Room broadcasting is currently in-memory via `RoomManager` on a single Node instance. Horizontal scaling with Redis Pub/Sub is deferred.
-4. **No True Offline Sync**: Edits made while disconnected are not queued for offline replay upon reconnect.
+---
 
-**Day 6 Scope**: The Day 6 milestone will build directly on top of this operation pipeline to implement state synchronization correctness, deterministic ordering, and conflict resolution.
+## 7. Synchronization State Machine
 
+Clients track their real-time synchronization state via `SyncStatus`:
+- `'synced'`: Local state is contiguous with server canonical sequence. No outstanding gaps.
+- `'syncing'`: Out-of-order operations buffered; `SYNC_REQUEST` transmitted to server; awaiting `SYNC_RESPONSE`.
+- `'diverged'`: Server notified `SYNC_REQUIRED` (e.g. client was disconnected so long that its missed sequence was purged from the 1,000-op buffer).
